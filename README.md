@@ -2,6 +2,8 @@
 
 中文社团任务协作应用。GitHub Pages 托管静态网页，Cloudflare Workers 提供 API，SQLite-backed Durable Object 持久化账号、社团、任务及完成记录。不再依赖微信小程序、AppID 或腾讯云开发。
 
+正式网站：[SPS 社团日程](https://farawayshore.github.io/sps-club-schedule/)。独立仓库：[farawayshore/sps-club-schedule](https://github.com/farawayshore/sps-club-schedule)。本机独立项目目录：`/Users/grassman_number/Projects/sps-club-schedule`。
+
 沿用原版的绿色配色、任务看板、逐人/协作完成、成员进度、截止时间、搜索和个人待办。所有社员可以发布任务；发布者与社团创建者管理任务。任务参与名单发布后固定，归档保留完成记录。
 
 ## 使用
@@ -46,7 +48,7 @@ npm run preview
 - `.github/workflows/pages.yml`：测试、构建和部署 GitHub Pages。
 - `qa/verification.md`：本次验证范围。
 
-部署说明在源码包所附 `GitHub Pages与Cloudflare接入说明.md`；工作区位置为 `gists/sps-club-web/GitHub Pages与Cloudflare接入说明.md`。
+部署说明：[GitHub Pages 与 Cloudflare 接入](docs/deployment.md)。本项目已从原 AI 工作区移出，部署工作流只操作这个独立仓库。
 
 ## 检查
 

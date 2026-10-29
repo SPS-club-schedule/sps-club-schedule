@@ -15,6 +15,14 @@
 
 测试账户只在本地。正式社团由使用者自行注册创建。
 
+390×844手机布局通过截图检查；模拟离线后显示上次内容，恢复网络后状态恢复“已同步”。已在正式 GitHub Pages 地址打开登录页，静态资源与公开 API 配置加载正常，控制台无警告或错误。
+
+## 发布
+
+Cloudflare Worker 部署成功（版本 `10dda8c0-2547-4a3c-a582-e7f6e53bff19`）。正式 `/health` 返回200；未登录的任务 API 返回401；来自正式 GitHub Pages 源的 CORS 允许；无效邀请码注册在实际线上密码计算之后返回400并回滚，没有创建正式测试账号。
+
+独立仓库初次 GitHub Actions 运行 `40839996907` 测试、构建、部署成功。网页地址：`https://farawayshore.github.io/sps-club-schedule/`。随后按用户要求，将整个源码仓库及部署说明从 AI 工作区移到 `/Users/grassman_number/Projects/sps-club-schedule`，独立仓库和后端身份保持不变。
+
 ## 边界
 
 本次不做微信小程序发布，不自动迁移原版演示数据。实际用户所在网络的 GitHub Pages 与 Cloudflare 可达性、手机系统分享菜单及长期运行费用，需要使用真实设备和后续用量确认。
