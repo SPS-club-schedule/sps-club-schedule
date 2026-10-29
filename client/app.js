@@ -1,6 +1,7 @@
 import * as api from './api';
 import * as views from './views';
 import { parseDeadline, parts, taskView } from '../shared/view';
+import { shiftMonth } from '../shared/calendar';
 const root = document.getElementById('app');
 let stop = null, generation = 0, inviteKey = '';
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
@@ -8,6 +9,10 @@ function go(path) { if (location.hash === '#' + path) route(); else location.has
 function render() {
   const active = document.activeElement, name = active?.getAttribute('name');
   const start = active?.selectionStart, end = active?.selectionEnd;
+  const calendarFocus = active?.matches('.deadline-calendar button') ? { action: active.dataset.action, value: active.dataset.value } : null;
+  const calendarLink = active?.matches('.calendar-task') ? active.getAttribute('href') : null;
+  const agendaScroll = root.querySelector('.calendar-agenda-list')?.scrollTop;
+  const agendaFocus = active?.matches('.calendar-agenda-list');
   const scroll = window.scrollY;
   const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members }[s.page] || views.auth)(s);
   root.innerHTML = html;
@@ -15,6 +20,16 @@ function render() {
     const next = root.querySelector(`[name="${CSS.escape(name)}"]`);
     if (next) { next.focus({ preventScroll: true }); if (start != null) next.setSelectionRange(start, end); }
   }
+  if (calendarFocus) {
+    const next = Array.from(root.querySelectorAll('.deadline-calendar button')).find(el => el.dataset.action === calendarFocus.action && el.dataset.value === calendarFocus.value);
+    (next || root.querySelector('[data-action="calendarToday"]'))?.focus({ preventScroll: true });
+  }
+  if (calendarLink) {
+    const next = Array.from(root.querySelectorAll('.calendar-task')).find(el => el.getAttribute('href') === calendarLink);
+    (next || root.querySelector('[data-action="calendarToday"]'))?.focus({ preventScroll: true });
+  }
+  const agenda = root.querySelector('.calendar-agenda-list');
+  if (agenda) { agenda.scrollTop = agendaScroll || 0; if (agendaFocus) agenda.focus({ preventScroll: true }); }
   window.scrollTo(0, scroll);
 }
 function toast(message) {
@@ -114,6 +129,16 @@ root.addEventListener('click', event => {
   if (action === 'authMode') { s.authMode = value; s.error = ''; render(); return; }
   if (action === 'joinMode') { s.joinMode = value; s.error = ''; render(); return; }
   if (action === 'filter') { s.filter = value; api.sync.touch(); render(); return; }
+  if (action.startsWith('calendar')) {
+    const today = parts(Date.now()).date;
+    s.calendar ||= { month: today.slice(0,7), date: '' };
+    if (action === 'calendarMonth') s.calendar = { month: shiftMonth(s.calendar.month, Number(value)), date: '' };
+    if (action === 'calendarToday') s.calendar = { month: today.slice(0,7), date: today };
+    if (action === 'calendarDate') s.calendar = { month: value.slice(0,7), date: s.calendar.date === value ? '' : value };
+    if (action === 'calendarClear') s.calendar.date = '';
+    const agenda = root.querySelector('.calendar-agenda-list'); if (agenda) agenda.scrollTop = 0;
+    api.sync.touch(); render(); return;
+  }
   if (action === 'mode' || action === 'priority') { s.form[action] = value; render(); return; }
   if (action === 'participant') { s.form.participantIds = s.form.participantIds.includes(id) ? s.form.participantIds.filter(x=>x!==id) : [...s.form.participantIds,id]; render(); return; }
   if (action === 'allMembers') { s.form.participantIds = s.form.participantIds.length===s.editBoard.members.length ? [] : s.editBoard.members.map(m=>m.id); render(); return; }

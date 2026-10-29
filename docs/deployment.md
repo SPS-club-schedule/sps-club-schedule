@@ -28,7 +28,7 @@ Worker 使用无第三方 Cookie 的 Bearer 会话，适用于 GitHub Pages 与 
 
 在仓库 Settings → Pages 中选择 GitHub Actions。在 Settings → Secrets and variables → Actions 的 Variables 中设置 `API_BASE_URL`，当前值为 `https://sps-schedule.folderrewind.top`。
 
-推送 `main` 后，工作流依次安装依赖、运行28项领域测试、10项 Workers 测试、构建静态网页并部署。前端使用相对资源路径与 hash 路由，适用于 `https://<用户名>.github.io/sps-club-schedule/` 项目路径，刷新任务详情不会触发 GitHub Pages 404。
+推送 `main` 后，工作流依次安装依赖、运行35项领域/同步/日历测试、11项 Workers 测试、3项网关测试、构建静态网页并部署。前端使用相对资源路径与 hash 路由，适用于 `https://<用户名>.github.io/sps-club-schedule/` 项目路径，刷新任务详情不会触发 GitHub Pages 404。
 
 本机针对正式后端构建：
 

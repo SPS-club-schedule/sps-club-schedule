@@ -1,5 +1,6 @@
 import { taskView, parts } from '../shared/view';
 import { syncLabel, user } from './api';
+import { calendar } from './calendar';
 export const e = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const button = (action, label, cls = 'primary', attrs = '') => `<button type="button" class="${cls}" data-action="${action}" ${attrs}>${label}</button>`;
 const link = (url, label, cls = 'plain') => `<a class="${cls}" href="#${url}">${label}</a>`;
@@ -32,7 +33,7 @@ export function entry(s) {
 export function board(s, mine) {
   const b = s.sync.board;
   if (!b?.club) return `<section class="page">${syncRow(s)}${error(s)}<div class="empty">正在获取社团任务…</div></section>${nav(mine?'mine':'board')}`;
-  const all = b.tasks.map(t=>taskView(t,b)), p=parts(Date.now());
+  const now = Date.now(), all = b.tasks.map(t=>taskView(t,b,now)), p=parts(now);
   const stats=[all.filter(t=>!t.done).length,all.filter(t=>t.assigned&&!t.myDone).length,all.filter(t=>t.done).length];
   let shown=mine?all.filter(t=>t.assigned):all;
   if (s.filter==='pending') shown=shown.filter(t=>mine?!t.myDone:!t.done);
@@ -41,6 +42,7 @@ export function board(s, mine) {
   shown.sort((a,b)=>Number(a.done)-Number(b.done)||a.dueAt-b.dueAt);
   return `<section class="page"><header class="row between masthead"><div class="row"><div class="logo">S</div><div><div class="club-name">${e(b.club.name)}</div><div class="eyebrow">CLUB WORKSPACE</div></div></div><div class="avatar owner">${e(b.me.name[0])}</div></header>${syncRow(s)}${error(s)}
   <div class="hero"><div class="row between"><div class="small hero-date">${e(p.date.slice(5).replace('-','月'))}日 · 星期${p.weekday}</div><span class="hero-dot">✦</span></div><h1 class="hero-title">把每一件事，<br>一起做好。</h1><div class="hero-sub">${b.members.length} 位伙伴，让想法一步步发生。</div><div class="hero-stats">${stats.map((n,i)=>`${i?'<div class="stat-divider"></div>':''}<div><div class="stat-number">${n}</div><div class="stat-label">${['进行中的任务','我的待办','已完成'][i]}</div></div>`).join('')}</div></div>
+  ${calendar(all,s.calendar,mine,now)}
   <div class="section row between"><h2 class="h2">${mine?'我的任务':'社团任务'}</h2>${link('/edit','＋ 发布任务','primary compact')}</div><div class="search-box"><input name="search" aria-label="搜索任务" placeholder="搜索任务" value="${e(s.search)}"></div>
   <div class="row between filter-row"><div class="chips">${[['all','全部'],['pending','待完成'],['done','已完成']].map(([v,l])=>button('filter',l,'chip '+(s.filter===v?'active':''),`data-value="${v}"`)).join('')}</div><span class="small muted">${shown.length} 项</span></div>
   ${shown.map(t=>`<article class="card task-card ${t.done?'completed':''}"><div class="row between"><div class="chips"><span class="pill">${t.modeLabel}</span>${t.priority==='high'&&!t.done?'<span class="pill high">优先</span>':''}</div><span class="pill ${t.status}">${t.statusLabel}</span></div><div class="row task-title-row">${link('/task?id='+encodeURIComponent(t._id),e(t.title),'grow task-title')}${t.canToggle?button('toggle',t.myDone?'✓':'','check '+(t.myDone?'checked':''),`data-id="${e(t._id)}" aria-label="${t.actionLabel}" ${busy(s)}`):''}</div><div class="row between small"><span class="due ${t.status}">◷ ${t.dueLabel}</span><span class="muted">${e(t.progressLabel)}</span></div><div class="progress space"><div class="progress-fill" style="width:${t.percent}%"></div></div><div class="task-bottom row between"><span class="small muted">${e(t.participantLabel)}</span>${link('/task?id='+encodeURIComponent(t._id),'↗','arrow')}</div></article>`).join('')||`<div class="card empty"><div class="empty-symbol">✓</div><h2 class="h2">${s.search?'没有找到相关任务':'这里暂时没有任务'}</h2><p class="small">发布一项任务，或看看其他分类。</p></div>`}
