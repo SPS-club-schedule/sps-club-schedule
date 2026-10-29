@@ -10,7 +10,7 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ClubService"] }],
   "vars": {
-    "ALLOWED_ORIGINS": "https://farawayshore.github.io",
+    "ALLOWED_ORIGINS": "https://sps-club-schedule.github.io,https://farawayshore.github.io",
     "REGISTRATION_OPEN": "true"
   },
   "observability": { "enabled": false }

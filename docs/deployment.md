@@ -2,7 +2,7 @@
 
 2026-10-29。独立项目源码：`/Users/grassman_number/Projects/sps-club-schedule`。旧微信小程序源码保留在 `/Users/grassman_number/AI/ai_works/sps-club-miniprogram`，不再作为本项目的运行入口。
 
-已发布前端：<https://farawayshore.github.io/sps-club-schedule/>。后端：<https://sps-club-api.sysu-physics-clubs.workers.dev>。仓库：<https://github.com/farawayshore/sps-club-schedule>。当前 AI 工作区的 `farawayshore/AI-new-` 仓库没有用于本应用的 Pages 部署。
+已发布前端：<https://sps-club-schedule.github.io/sps-club-schedule/>。后端：<https://sps-club-api.sysu-physics-clubs.workers.dev>。仓库：<https://github.com/SPS-club-schedule/sps-club-schedule>。当前 AI 工作区的 `farawayshore/AI-new-` 仓库没有用于本应用的 Pages 部署。
 
 ## Cloudflare 后端
 
@@ -14,7 +14,7 @@ npx wrangler login
 npm run worker:deploy
 ```
 
-部署前将 `ALLOWED_ORIGINS` 设为实际网页的完整源，例如 `https://farawayshore.github.io`；不带仓库路径、不带尾斜杠。多个源以逗号分隔。正式环境不要加入任意通配源。本地 `.dev.vars` 只用于本机开发，不能上传到仓库。
+部署前将 `ALLOWED_ORIGINS` 设为实际网页的完整源，例如 `https://sps-club-schedule.github.io`；不带仓库路径、不带尾斜杠。多个源以逗号分隔。正式环境不要加入任意通配源。本地 `.dev.vars` 只用于本机开发，不能上传到仓库。
 
 `REGISTRATION_OPEN=true` 允许通过邀请码注册，或注册并创建自己的社团。注册不会获得其他社团的数据；访问每项任务时仍检查社团成员身份。设置为 `false` 可以暂停新账号注册，不影响已有账号登录。
 
