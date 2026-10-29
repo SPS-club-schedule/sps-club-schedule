@@ -8,7 +8,9 @@
     "test:worker": "node --test tests/worker.test.mjs",
     "preview": "node scripts/preview.mjs",
     "worker:dev": "wrangler dev --ip 127.0.0.1 --port 8787",
-    "worker:deploy": "wrangler deploy"
+    "worker:deploy": "wrangler deploy",
+    "gateway:deploy": "wrangler deploy --config wrangler.gateway.jsonc",
+    "test:gateway": "node --test tests/gateway.test.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2",

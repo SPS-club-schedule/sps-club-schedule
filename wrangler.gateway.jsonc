@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sps-club-schedule",
+  "account_id": "9b780cdb0cd2a083330601598d3ea9dc",
+  "main": "server/gateway/worker.mjs",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  // The existing custom domain sps-schedule.folderrewind.top is managed by
+  // Leafuke. Preserve that binding; this invitation has no zone DNS permission.
+  "observability": { "enabled": false }
+}

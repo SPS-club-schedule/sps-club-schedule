@@ -1,5 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -16,7 +17,7 @@ async function register(username, mode, extra={}) { return post('/auth/register'
 before(async()=>{
   const result=await build({entryPoints:['server/worker.mjs'],bundle:true,format:'esm',platform:'neutral',external:['cloudflare:workers','node:*'],write:false});
   directory=await mkdtemp(path.join(tmpdir(),'sps-worker-'));
-  options={ modules:[{type:'ESModule',path:'worker.mjs',contents:result.outputFiles[0].text}], compatibilityDate:'2026-07-01',compatibilityFlags:['nodejs_compat'],durableObjects:{CLUB_SERVICE:{className:'ClubService',useSQLite:true}},durableObjectsPersist:directory,bindings:{ALLOWED_ORIGINS:'https://site.test',REGISTRATION_OPEN:'true'} };
+  options={ modules:[{type:'ESModule',path:'worker.mjs',contents:result.outputFiles[0].text}], compatibilityDate:'2026-07-01',compatibilityFlags:['nodejs_compat'],durableObjects:{CLUB_SERVICE:{className:'ClubService',useSQLite:true}},durableObjectsPersist:directory,bindings:{ALLOWED_ORIGINS:'https://site.test',REGISTRATION_OPEN:'true',GATEWAY_SIGNING_KEY:'test-gateway-secret'} };
   options=convertV4MiniflareOptions(options); options.resourcePersistencePath=directory; mf=new Miniflare(options);
   const first=await register('owner','create'); assert.equal(first.status,200,JSON.stringify(first)); owner=first.data; clubId=owner.clubId;
   invite=(await api('getInvite',{clubId})).token;
@@ -85,4 +86,24 @@ test('accounts, sessions and tasks survive a Workers runtime restart',async()=>{
   await mf.dispose(); mf=new Miniflare(options);
   const board=await api('bootstrap',{clubId}); assert.ok(board.tasks.some(t=>t.title==='权限测试'));
   assert.equal((await post('/auth/login',{username:'owner',password})).status,200);
+});
+
+
+test('gateway IP proofs preserve separate rate limits and reject spoofed or expired proofs', async () => {
+  async function attempt(ip, valid = true, expired = false) {
+    const time = String(Date.now() - (expired ? 120000 : 0));
+    const signature = createHmac('sha256', valid ? 'test-gateway-secret' : 'wrong-key').update(`${time}\n${ip}`).digest('hex');
+    return mf.dispatchFetch('http://localhost/auth/login', { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.100',
+      'X-SPS-Gateway-IP': ip, 'X-SPS-Gateway-Time': time, 'X-SPS-Gateway-Signature': signature
+    }, body: JSON.stringify({ username: '!', password }) });
+  }
+  for (let i = 0; i < 120; i++) assert.equal((await attempt('192.0.2.1')).status, 400);
+  assert.equal((await attempt('192.0.2.1')).status, 429);
+  assert.equal((await attempt('192.0.2.2')).status, 400);
+  // Forged varying IPs must still share the real transport IP limit.
+  for (let i = 0; i < 120; i++) assert.equal((await attempt(`192.0.2.${i}`, false)).status, 400);
+  assert.equal((await attempt('192.0.2.250', false)).status, 429);
+  assert.equal((await attempt('192.0.2.251', true, true)).status, 429);
+  assert.equal((await attempt('192.0.2.2')).status, 400);
 });

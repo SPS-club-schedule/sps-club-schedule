@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "sps-club-api",
+  "account_id": "f8f6e5eb8c25f30da5e3af3f54a994a6",
   "main": "server/worker.mjs",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],

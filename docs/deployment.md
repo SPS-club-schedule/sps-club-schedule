@@ -2,7 +2,7 @@
 
 2026-10-29。独立项目源码：`/Users/grassman_number/Projects/sps-club-schedule`。旧微信小程序源码保留在 `/Users/grassman_number/AI/ai_works/sps-club-miniprogram`，不再作为本项目的运行入口。
 
-已发布前端：<https://sps-club-schedule.github.io/sps-club-schedule/>。后端：<https://sps-club-api.sysu-physics-clubs.workers.dev>。仓库：<https://github.com/SPS-club-schedule/sps-club-schedule>。当前 AI 工作区的 `farawayshore/AI-new-` 仓库没有用于本应用的 Pages 部署。
+已发布前端：<https://sps-club-schedule.github.io/sps-club-schedule/>。API 入口：<https://sps-schedule.folderrewind.top>（Leafuke 的 Worker 网关）。原 API 与数据库保留在 <https://sps-club-api.sysu-physics-clubs.workers.dev>，详见 [网关配置与回滚](cloudflare-gateway.md)。仓库：<https://github.com/SPS-club-schedule/sps-club-schedule>。当前 AI 工作区的 `farawayshore/AI-new-` 仓库没有用于本应用的 Pages 部署。
 
 ## Cloudflare 后端
 
@@ -12,6 +12,8 @@
 npm ci
 npx wrangler login
 npm run worker:deploy
+# 网关单独部署：
+npm run gateway:deploy
 ```
 
 部署前将 `ALLOWED_ORIGINS` 设为实际网页的完整源，例如 `https://sps-club-schedule.github.io`；不带仓库路径、不带尾斜杠。多个源以逗号分隔。正式环境不要加入任意通配源。本地 `.dev.vars` 只用于本机开发，不能上传到仓库。
@@ -24,7 +26,7 @@ Worker 使用无第三方 Cookie 的 Bearer 会话，适用于 GitHub Pages 与 
 
 使用独立仓库 `sps-club-schedule`，仅上传本项目源码。不要上传其他工作区、`.wrangler/`、`.dev.vars` 或本地账号数据。公开的是网页与代码，社团数据保存在后端，登录并通过成员权限检查后才能读取。
 
-在仓库 Settings → Pages 中选择 GitHub Actions。在 Settings → Secrets and variables → Actions 的 Variables 中设置 `API_BASE_URL`，值为 Wrangler 返回的 HTTPS Worker 源，例如 `https://sps-club-api.<账户子域>.workers.dev`。
+在仓库 Settings → Pages 中选择 GitHub Actions。在 Settings → Secrets and variables → Actions 的 Variables 中设置 `API_BASE_URL`，当前值为 `https://sps-schedule.folderrewind.top`。
 
 推送 `main` 后，工作流依次安装依赖、运行28项领域测试、10项 Workers 测试、构建静态网页并部署。前端使用相对资源路径与 hash 路由，适用于 `https://<用户名>.github.io/sps-club-schedule/` 项目路径，刷新任务详情不会触发 GitHub Pages 404。
 

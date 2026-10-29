@@ -2,6 +2,8 @@
 
 中文社团任务协作应用。GitHub Pages 托管静态网页，Cloudflare Workers 提供 API，SQLite-backed Durable Object 持久化账号、社团、任务及完成记录。不再依赖微信小程序、AppID 或腾讯云开发。
 
+API 入口使用 Leafuke 提供的 `https://sps-schedule.folderrewind.top`，经网关访问原有数据库；配置与回滚见 [域名网关说明](docs/cloudflare-gateway.md)。
+
 正式网站：[SPS 社团日程](https://sps-club-schedule.github.io/sps-club-schedule/)。独立仓库：[SPS-club-schedule/sps-club-schedule](https://github.com/SPS-club-schedule/sps-club-schedule)。本机独立项目目录：`/Users/grassman_number/Projects/sps-club-schedule`。
 
 沿用原版的绿色配色、任务看板、逐人/协作完成、成员进度、截止时间、搜索和个人待办。所有社员可以发布任务；发布者与社团创建者管理任务。任务参与名单发布后固定，归档保留完成记录。

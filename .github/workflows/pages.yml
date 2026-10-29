@@ -20,6 +20,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run test:worker
+      - run: npm run test:gateway
       - run: npm run build
         env:
           API_BASE_URL: ${{ vars.API_BASE_URL }}

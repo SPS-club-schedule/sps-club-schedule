@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import domain from '../shared/domain.js';
 import { createStore } from './store.mjs';
 const { createService, ClubError } = domain;
@@ -9,6 +9,19 @@ const fail = (code, message) => { throw new ClubError(code, message); };
 const SESSION_AGE = 7 * 86400000;
 const STATUS = { VALIDATION: 400, UNAUTHENTICATED: 401, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409, ARCHIVED: 409, RATE_LIMIT: 429 };
 const json = (body, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
+// Cross-zone Worker fetches mask CF-Connecting-IP. Only accept a client IP
+// authenticated by our gateway; unsigned direct requests retain the old path.
+function clientIp(request, env) {
+  const ip = request.headers.get('X-SPS-Gateway-IP');
+  const time = request.headers.get('X-SPS-Gateway-Time');
+  const proof = request.headers.get('X-SPS-Gateway-Signature');
+  if (env.GATEWAY_SIGNING_KEY && ip && ip.length <= 64 && /^\d{13}$/.test(time || '') &&
+      Math.abs(Date.now() - Number(time)) <= 60000 && /^[a-f0-9]{64}$/.test(proof || '')) {
+    const expected = createHmac('sha256', env.GATEWAY_SIGNING_KEY).update(`${time}\n${ip}`).digest('hex');
+    if (timingSafeEqual(Buffer.from(proof, 'hex'), Buffer.from(expected, 'hex'))) return ip;
+  }
+  return request.headers.get('CF-Connecting-IP') || 'local';
+}
 function username(value) {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_]{3,30}$/.test(value)) fail('VALIDATION', '用户名须为3—30位英文字母、数字或下划线');
   return value.toLowerCase();
@@ -155,7 +168,7 @@ export default {
     if (path === '/health' && request.method === 'GET') return Response.json({ ok: true, service: 'sps-club-api' }, { headers });
     if (request.method !== 'POST' || !['/api', '/auth/register', '/auth/login', '/auth/logout', '/auth/recover'].includes(path)) return Response.json({ ok: false, message: '接口不存在' }, { status: 404, headers });
     const forwarded = new Request(request);
-    forwarded.headers.set('X-SPS-IP', hash(request.headers.get('CF-Connecting-IP') || 'local'));
+    forwarded.headers.set('X-SPS-IP', hash(clientIp(request, env)));
     const stub = env.CLUB_SERVICE.get(env.CLUB_SERVICE.idFromName('sps-club-service-v1'));
     const response = await stub.fetch(forwarded);
     return new Response(response.body, { status: response.status, headers: { ...Object.fromEntries(response.headers), ...headers } });
