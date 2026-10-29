@@ -5,7 +5,7 @@
 function createSyncClient({ transport, context, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
   let selected = null, board = null, generation = 0, epoch = 0;
   let inFlight = null, timer = null, timerAt = 0, writes = 0, dirty = false;
-  const taskRevisions = new Map();
+  const taskRevisions = new Map(), templateRevisions = new Map();
   let visible = true, online = true, blocked = false;
   let phase = 'idle', message = '', checkedAt = 0, idleCount = 0, failures = 0;
   const listeners = new Set();
@@ -20,7 +20,7 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
     // bootstrap discovers the first club before the page persists its selection.
     if (selected && selected.namespace === next.namespace && board && board.club && board.club.id === next.clubId) { selected = next; return; }
     selected = next; generation += 1; epoch += 1; cancel();
-    board = null; inFlight = null; checkedAt = 0; idleCount = 0; failures = 0; taskRevisions.clear();
+    board = null; inFlight = null; checkedAt = 0; idleCount = 0; failures = 0; taskRevisions.clear(); templateRevisions.clear();
     dirty = false; blocked = false; phase = online ? 'idle' : 'offline'; message = '';
   }
   function schedule(keepEarlier = false) {
@@ -31,16 +31,16 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
     timerAt = now() + wait;
     timer = setTimer(() => { timer = null; refresh({ force: true }).catch(() => {}); }, wait);
   }
-  function mergeTasks(current, patches) {
+  function mergeRecords(current, patches, revisions) {
     const tasks = new Map(current.map(task => [task._id, task]));
     for (const task of patches) {
       // Keep tombstone revisions after removal so a late write acknowledgement
       // cannot resurrect a task that another response already archived.
-      if ((taskRevisions.get(task._id) || 0) > task.revision) continue;
-      taskRevisions.set(task._id, task.revision);
+      if ((revisions.get(task._id) || 0) > task.revision) continue;
+      revisions.set(task._id, task.revision);
       if (task.archived) tasks.delete(task._id); else tasks.set(task._id, task);
     }
-    return Array.from(tasks.values()).sort((a, b) => a.dueAt - b.dueAt);
+    return Array.from(tasks.values()).sort((a, b) => (a.dueAt || 0) - (b.dueAt || 0));
   }
   function mergeMembers(current, patches) {
     const members = new Map(current.map(member => [member.id, member]));
@@ -53,12 +53,14 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
   function acceptRead(result) {
     if (result.unchanged) return false;
     if (result.full || !board || !result.club) {
-      board = Object.assign({}, result, { clubs: result.clubs || (board && board.clubs) || [] });
-      taskRevisions.clear();
+      board = Object.assign({}, result, { clubs: result.clubs || (board && board.clubs) || [], templates: result.templates || [] });
+      taskRevisions.clear(); templateRevisions.clear();
       for (const task of board.tasks || []) taskRevisions.set(task._id, task.revision);
+      for (const template of board.templates) templateRevisions.set(template._id, template.revision);
     } else {
       board = Object.assign({}, board, result, {
-        tasks: mergeTasks(board.tasks, result.tasks), members: mergeMembers(board.members, result.members)
+        tasks: mergeRecords(board.tasks, result.tasks, taskRevisions), members: mergeMembers(board.members, result.members),
+        templates: mergeRecords(board.templates || [], result.templates || [], templateRevisions)
       });
     }
     if (board.me && board.members) board.me = board.members.find(m => m.id === board.me.id) || board.me;
@@ -102,7 +104,8 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
   function acceptMutation(result) {
     if (!board || !board.club || !result.club || result.club.id !== board.club.id) return;
     const patch = {};
-    if (result.tasks || result.task) patch.tasks = mergeTasks(board.tasks, result.tasks || [result.task]);
+    if (result.tasks || result.task) patch.tasks = mergeRecords(board.tasks, result.tasks || [result.task], taskRevisions);
+    if (result.template) patch.templates = mergeRecords(board.templates || [], [result.template], templateRevisions);
     if (result.member) {
       patch.members = mergeMembers(board.members, [result.member]);
       if (board.me.id === result.member.id) patch.me = patch.members.find(m => m.id === board.me.id);

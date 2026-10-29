@@ -1,4 +1,4 @@
-const COLLECTIONS = new Set(['clubs', 'members', 'tasks', 'invites']);
+const COLLECTIONS = new Set(['clubs', 'members', 'tasks', 'invites', 'templates']);
 const COLUMNS = { clubId: 'club_id', identity: 'identity', archived: 'archived' };
 export function createStore(storage) {
   const sql = storage.sql;

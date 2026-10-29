@@ -2,6 +2,7 @@ import * as api from './api';
 import * as views from './views';
 import { parseDeadline, parts, taskView } from '../shared/view';
 import { shiftMonth } from '../shared/calendar';
+import { templateDraft, draftDeadline, MAX_STEPS } from '../shared/templates';
 const root = document.getElementById('app');
 let stop = null, generation = 0, inviteKey = '';
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
@@ -14,7 +15,7 @@ function render() {
   const agendaScroll = root.querySelector('.calendar-agenda-list')?.scrollTop;
   const agendaFocus = active?.matches('.calendar-agenda-list');
   const scroll = window.scrollY;
-  const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members }[s.page] || views.auth)(s);
+  const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor }[s.page] || views.auth)(s);
   root.innerHTML = html;
   if (name) {
     const next = root.querySelector(`[name="${CSS.escape(name)}"]`);
@@ -50,7 +51,8 @@ async function copy(text) {
 function inviteLink(token) { const url = new URL(location.href); url.hash = '/auth?invite=' + token; return url.href; }
 function receive(state) {
   s.sync = state;
-  if (state.board && !state.board.club && ['board','mine','task','members'].includes(s.page)) { go('/entry'); return; }
+  if (s.page==='templates' && s.category && state.board && !(state.board.templates || []).some(t=>t.category===s.category)) s.category='';
+  if (state.board && !state.board.club && ['board','mine','task','members','templates'].includes(s.page)) { go('/entry'); return; }
   if (state.board?.club && !api.clubId()) api.setClub(state.board.club.id);
   if (s.page === 'members' && state.board?.club && state.phase === 'ready') {
     const key = api.user().id + ':' + state.board.club.id + ':' + state.board.club.inviteVersion;
@@ -67,9 +69,9 @@ async function route() {
   const page = url.pathname.slice(1), invitation = url.searchParams.get('invite');
   if (!api.user() && page !== 'auth') { go('/auth'); return; }
   if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : '/board'); return; }
-  s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId() };
+  s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId() };
   inviteKey = ''; window.scrollTo(0,0); render();
-  if (['board','mine','task','members'].includes(page)) { stop = api.sync.watch(receive); return; }
+  if (['board','mine','task','members','templates'].includes(page)) { stop = api.sync.watch(receive); return; }
   if (page === 'auth') return;
   try {
     const b = await api.bootstrap({ includeClubs: page === 'entry' });
@@ -89,24 +91,67 @@ async function route() {
       const p = parts(task?.dueAt || (parent?.dueAt > Date.now() ? parent.dueAt : Date.now()+86400000));
       s.editBoard = b; s.revision = task?.revision;
       s.form = { title: task?.title || '', description: task?.description || '', date: p.date, time: task || parent ? p.time : '20:00', mode: task?.mode || 'individual', priority: task?.priority || 'normal', participantIds: task?.participantIds.slice() || (parent ? [] : b.members.map(m=>m.id)) };
+      if (!task && !parent && s.selectedTemplate) applyTemplate();
+    }
+    if (page === 'template-edit') {
+      if (!b.club) { go('/entry'); return; }
+      const id=s.id || url.searchParams.get('copy');
+      const template=id ? (b.templates || []).find(t=>t._id===id) : null;
+      if (id&&!template) throw new Error('模板不存在或已归档');
+      s.revision=template?.revision;
+      const draft=template?templateDraft(template,b.members):{title:'',description:'',mode:'individual',priority:'normal',participantIds:[],steps:[]};
+      s.steps=draft.steps;
+      const { steps, ...main }=draft;
+      s.form={...main,name:template?(s.id?template.name:template.name.slice(0,76)+'（副本）'):'',category:template?.category || '未分类'};
+      s.editBoard = b;
     }
     render();
   } catch (error) { if (ticket === generation) { s.error = error.message; render(); } }
 }
+function applyTemplate() {
+  const template=(s.editBoard.templates || []).find(t=>t._id===s.selectedTemplate);
+  if (!template) throw new Error('请先选择一个模板');
+  const draft=templateDraft(template,s.editBoard.members);
+  const { steps, ...main }=draft;
+  s.form={...s.form,...main,participantIds:main.participantIds.length?main.participantIds:s.editBoard.members.map(m=>m.id)};
+  s.steps=steps; s.openSteps=new Set(); s.appliedTemplate={id:template._id,name:template.name};
+}
+const taskFields = f => ({ title:f.title,description:f.description,mode:f.mode,priority:f.priority,participantIds:f.participantIds });
+function focusInvalidField(event) {
+  const details=event.target.closest('details');
+  if (details) { details.open=true; s.openSteps.add(Number(details.dataset.stepPanel)); }
+}
+root.addEventListener('invalid',focusInvalidField,true);
+root.addEventListener('toggle',event=>{
+  if (event.target.matches('details[data-step-panel]')) {
+    const index=Number(event.target.dataset.stepPanel);
+    if (event.target.open) s.openSteps.add(index); else s.openSteps.delete(index);
+  }
+},true);
 async function perform(work) {
   if (s.busy) return;
   const ticket = generation; s.busy = true; s.error = ''; render();
   try { await work(); }
-  catch (error) { if (ticket === generation) { s.error = error.message; render(); } }
+  catch (error) { if (ticket === generation) { s.error = error.message; render(); root.querySelector('[role="alert"]')?.scrollIntoView({block:'center'}); } }
   finally { if (ticket === generation) { s.busy = false; render(); } }
 }
-root.addEventListener('input', event => {
+function inputChanged(event) {
+  if (s.busy) return;
   const { name, value } = event.target;
   if (!name) return;
-  if (name === 'search') { s.search = value; api.sync.touch(); render(); }
-  else s.form[name] = value;
-});
-root.addEventListener('change', event => { if (event.target.name) s.form[event.target.name] = event.target.value; });
+  const {step,field}=event.target.dataset;
+  if (step!==undefined) {
+    if (!s.steps[Number(step)]) return;
+    s.steps[Number(step)][field]=field==='daysBefore'&&value!==''?Number(value):value;
+    if (field==='daysBefore') s.steps[Number(step)].customDeadline=false;
+    if (event.type==='change') render();
+  } else if (name==='selectedTemplate') s.selectedTemplate=value;
+  else if (name==='templateCategory') { s.category=value; render(); }
+  else if (name === 'search') { s.search = value; api.sync.touch(); render(); }
+  else { s.form[name]=value; if(event.type==='change'&&['date','time'].includes(name)&&s.steps.length) render(); }
+}
+root.addEventListener('input', inputChanged);
+root.addEventListener('change', inputChanged);
 root.addEventListener('submit', event => {
   event.preventDefault(); const kind = event.target.dataset.form;
   const data = { ...s.form, ...Object.fromEntries(new FormData(event.target)) };
@@ -122,8 +167,19 @@ root.addEventListener('submit', event => {
       api.setClub(result.clubId); go('/board');
     }
     if (kind === 'task') {
-      const result = await api.call(s.id?'editTask':'createTask', { ...data, dueAt: parseDeadline(data.date,data.time), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId });
+      const group=!s.id&&!s.parent&&s.steps.length>0;
+      const subtasks=group?s.steps.map((step,index)=>{
+        if (!step.participantIds.length) { s.openSteps.add(index); throw new Error(`请为子任务${index+1}「${step.title}」选择负责人`); }
+        const dueAt=draftDeadline(data,step);
+        if(dueAt<=Date.now()) { s.openSteps.add(index); throw new Error(`子任务${index+1}「${step.title}」的截止时间已过，请调整日期或提前天数`); }
+        return {...taskFields(step),daysBefore:step.daysBefore,...(step.customDeadline?{dueAt}:{})};
+      }):undefined;
+      const result = await api.call(s.id?'editTask':group?'createTaskGroup':'createTask', { ...taskFields(data), dueAt: parseDeadline(data.date,data.time), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId, ...(group?{subtasks,templateId:s.appliedTemplate?.id}:{}) });
       go('/task?id='+encodeURIComponent(result.taskId));
+    }
+    if (kind === 'template') {
+      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),name:data.name,category:data.category,steps:s.steps.map(step=>({...taskFields(step),daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
+      go('/templates'); toast('共享模板已保存');
     }
     if (kind === 'name') { await api.call('renameMe', { clubId: s.sync.board.club.id, name: data.nickname }); s.form.nickname = undefined; toast('称呼已更新'); }
   });
@@ -131,6 +187,30 @@ root.addEventListener('submit', event => {
 root.addEventListener('click', event => {
   const el = event.target.closest('[data-action]'); if (!el || el.disabled) return;
   const { action, value, id } = el.dataset;
+  if (s.busy) return;
+  if (action==='applyTemplate') {
+    perform(async()=>{
+      if ((s.form.title || s.steps.length) && !await confirmAction('套用这个模板？','将替换当前草稿的名称、说明、分工和子任务，保留主任务截止日期。')) return;
+      applyTemplate();
+    }); return;
+  }
+  if (['addStep','removeStep','stepUp','stepDown','stepParticipant','stepCustom','stepRelative','assignStepsToMe'].includes(action)) {
+    const index=Number(el.dataset.index), step=s.steps[index];
+    if(action==='addStep'&&s.steps.length<MAX_STEPS) { s.steps.push({title:'',description:'',daysBefore:1,mode:'individual',priority:'normal',participantIds:[],customDeadline:false}); s.openSteps.add(s.steps.length-1); }
+    if(action==='removeStep') { s.steps.splice(index,1); s.openSteps=new Set(); }
+    if(action==='stepUp'||action==='stepDown') {
+      const target=index+(action==='stepUp'?-1:1);
+      if(target>=0&&target<s.steps.length) { [s.steps[index],s.steps[target]]=[s.steps[target],s.steps[index]]; s.openSteps=new Set([target]); }
+    }
+    if(action==='stepParticipant') step.participantIds=step.participantIds.includes(id)?step.participantIds.filter(x=>x!==id):[...step.participantIds,id];
+    if(action==='assignStepsToMe') for(const item of s.steps) item.participantIds=[s.editBoard.me.id];
+    if(action==='stepRelative') step.customDeadline=false;
+    if(action==='stepCustom') {
+      try { const p=parts(draftDeadline(s.form,step)); Object.assign(step,{date:p.date,time:p.time,customDeadline:true}); }
+      catch(error) { s.error=error.message; }
+    }
+    render(); return;
+  }
   if (action === 'reload') { location.reload(); return; }
   if (action === 'authMode') { s.authMode = value; s.error = ''; render(); return; }
   if (action === 'joinMode') { s.joinMode = value; s.error = ''; render(); return; }
@@ -166,6 +246,10 @@ root.addEventListener('click', event => {
       await api.call('complete', { taskId: id, done: !t.myDone }); toast(t.myDone?'已撤销完成':'已记录完成');
     }
     if (action === 'archive' && await confirmAction('归档这项任务？','归档后将从看板隐藏；如有子任务，也会一起归档。已有完成记录会保留。')) { await api.call('archiveTask', { taskId: s.id }); go('/board'); }
+    if(action==='archiveTemplate') {
+      const template=s.sync.board.templates.find(t=>t._id===id);
+      if(template&&await confirmAction('归档这个模板？','模板将从共享模板库隐藏，已经发布的任务保持不变。')) await api.call('archiveTemplate',{templateId:id,revision:template.revision});
+    }
     if (action === 'rotateInvite' && await confirmAction('更换邀请码？','已有成员不受影响，旧邀请码和邀请链接将失效。')) { const result = await api.call('rotateInvite', { clubId: s.sync.board.club.id }); s.invite = result.token; }
     if (action === 'logout') { await api.logout(); go('/auth'); }
   });

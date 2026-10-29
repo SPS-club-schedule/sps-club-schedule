@@ -154,3 +154,23 @@ test('parent archive removes every subtask immediately and late child edits cann
   late.resolve(mutation(1,{...child,revision:2,title:'Late title'}));await pending;
   assert.deepEqual(h.client.getState().board.tasks,[]);
 });
+
+test('template edits, categories and tombstones merge without dropping untouched templates or reviving archived ones',async()=>{
+  const one={_id:'tpl-one',name:'Seminar',category:'Academic',revision:1,archived:false};
+  const two={...one,_id:'tpl-two',name:'Workshop'};
+  const late=deferred();
+  const h=harness(action=>action==='bootstrap'?{...snapshot(),templates:[one,two]}:action==='editTemplate'?late.promise:{baseVersion:2,version:3,club:snapshot().club,template:{...one,revision:3,archived:true}});
+  await h.client.refresh(); const pending=h.client.mutate('editTemplate',{});
+  await h.client.mutate('archiveTemplate',{});
+  late.resolve({baseVersion:1,version:2,club:snapshot().club,template:{...one,revision:2,category:'Changed'}}); await pending;
+  assert.deepEqual(h.client.getState().board.templates,[two]);
+  h.selected.namespace='other-person';h.client.select();assert.equal(h.client.getState().board,null);
+});
+
+test('a template-only remote delta preserves tasks and unrelated shared templates',async()=>{
+  const one={_id:'tpl-one',revision:1,name:'Seminar',category:'Academic'},two={...{_id:'tpl-two',revision:1,name:'Workshop'}};
+  const h=harness(action=>action==='bootstrap'?{...snapshot(),templates:[one,two]}:{...snapshot(2,[]),full:false,members:[],templates:[{...one,revision:2,category:'Talks'}]});
+  await h.client.refresh();await h.client.refresh({force:true});
+  assert.equal(h.client.getState().board.tasks.length,1);assert.equal(h.client.getState().board.templates.length,2);
+  assert.equal(h.client.getState().board.templates.find(t=>t._id==='tpl-one').category,'Talks');
+});

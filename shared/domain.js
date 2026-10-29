@@ -1,4 +1,5 @@
 'use strict';
+const { seminarTemplate, relativeDeadline, MAX_STEPS } = require('./templates');
 
 // Shared by the cloud function and the local demonstration. Identity is injected
 // by the adapter; no action trusts a member ID supplied as the caller.
@@ -42,6 +43,43 @@ function createService({ store, now, randomId, hash }) {
     return { title: text(input.title, '任务名称', 80), description: text(input.description || '', '任务说明', 2000, true), priority: input.priority };
   }
   function canManage(task, me) { return task.creatorId === me._id || task.parentCreatorId === me._id || me.role === 'owner'; }
+  function assignment(input, roster, optional = false) {
+    if (!['individual', 'shared'].includes(input.mode)) fail('VALIDATION', '请选择完成方式');
+    if (!Array.isArray(input.participantIds) || (!optional && !input.participantIds.length) || input.participantIds.length > 200) fail('VALIDATION', optional ? '默认负责人最多200人' : '请为每项任务选择1—200位负责人');
+    const participantIds = [...new Set(input.participantIds)];
+    if (participantIds.some(id => !roster.some(m => m._id === id))) fail('VALIDATION', '负责人必须是本社团成员');
+    return { mode: input.mode, participantIds };
+  }
+  function offset(value) {
+    if (!Number.isInteger(value) || value < 0 || value > 365) fail('VALIDATION', '提前天数须为0—365的整数');
+    return value;
+  }
+  function templateContent(input, roster) {
+    if (!Array.isArray(input.steps) || !input.steps.length || input.steps.length > MAX_STEPS) fail('VALIDATION', `模板须包含1—${MAX_STEPS}项子任务`);
+    return {
+      name: text(input.name, '模板名称', 80), category: text(input.category || '', '分类', 30, true) || '未分类',
+      ...content(input), ...assignment(input, roster, true),
+      steps: input.steps.map(step => {
+        if (!step || typeof step !== 'object') fail('VALIDATION', '子任务格式无效');
+        return { ...content(step), ...assignment(step, roster, true), daysBefore: offset(step.daysBefore) };
+      })
+    };
+  }
+  async function seedTemplate(tx, club, version) {
+    const id = 'tpl_' + hash(club._id + ':seminar').slice(0, 32);
+    await tx.put('templates', id, { ...seminarTemplate(), clubId: club._id, creatorId: club.ownerId, updatedBy: club.ownerId, createdAt: now(), updatedAt: now(), revision: 1, syncVersion: version, archived: false });
+  }
+  async function ensureTemplates(club) {
+    if (club.templatesInitialized) return club;
+    return store.transaction(async tx => {
+      const latest = await tx.get('clubs', club._id);
+      if (latest.templatesInitialized) return latest;
+      const updated = { ...latest, templatesInitialized: true };
+      const change = await stamp(tx, club._id, 'templates', updated);
+      await seedTemplate(tx, latest, change.version);
+      return { ...updated, syncVersion: change.version, templatesVersion: change.version };
+    });
+  }
   // Cursor and changed document are written in the SAME transaction. A timestamp
   // cursor could skip simultaneous writes; this monotonic per-club cursor cannot.
   async function stamp(tx, clubId, kind, existing) {
@@ -62,13 +100,14 @@ function createService({ store, now, randomId, hash }) {
     // Capture the cursor BEFORE scans. Writes that race these scans will be
     // fetched again next time; never return a cursor sampled after the scans.
     const version = club.syncVersion || 0;
-    const [members, tasks] = await Promise.all([
-      store.find('members', { clubId: club._id }), store.find('tasks', { clubId: club._id, archived: false })
+    const [members, tasks, templates] = await Promise.all([
+      store.find('members', { clubId: club._id }), store.find('tasks', { clubId: club._id, archived: false }),
+      store.find('templates', { clubId: club._id, archived: false })
     ]);
     return {
       full: true, version, club: safeClub(club), me: safeMember(members.find(m => m._id === me._id) || me),
       members: members.map(safeMember).sort((a, b) => a.joinedAt - b.joinedAt),
-      tasks: tasks.sort((a, b) => a.dueAt - b.dueAt)
+      tasks: tasks.sort((a, b) => a.dueAt - b.dueAt), templates
     };
   }
   const actions = {
@@ -83,23 +122,25 @@ function createService({ store, now, randomId, hash }) {
       const me = await member(store, clubId, identity);
       const club = await store.get('clubs', clubId);
       if (!club) fail('NOT_FOUND', '社团不存在');
-      return Object.assign({ clubs }, await snapshot(club, me));
+      return Object.assign({ clubs }, await snapshot(await ensureTemplates(club), me));
     },
     async sync(input, identity) {
       // Membership is checked on EVERY probe, even when the cursor matches.
       const me = await member(store, input.clubId, identity);
-      const club = await store.get('clubs', input.clubId);
+      let club = await store.get('clubs', input.clubId);
       if (!club) fail('NOT_FOUND', '社团不存在');
+      club = await ensureTemplates(club);
       const version = club.syncVersion || 0;
       const since = input.since;
       if (!Number.isSafeInteger(since) || since < 0 || since > version) return snapshot(club, me);
       if (since === version) return { unchanged: true, version };
-      const [members, tasks] = await Promise.all([
+      const [members, tasks, templates] = await Promise.all([
         (club.membersVersion || 0) > since ? store.findSince('members', { clubId: input.clubId }, since) : [],
-        (club.tasksVersion || 0) > since ? store.findSince('tasks', { clubId: input.clubId }, since) : []
+        (club.tasksVersion || 0) > since ? store.findSince('tasks', { clubId: input.clubId }, since) : [],
+        (club.templatesVersion || 0) > since ? store.findSince('templates', { clubId: input.clubId }, since) : []
       ]);
       // Archived task documents are tombstones and must be included in deltas.
-      return { full: false, version, club: safeClub(club), me: safeMember(members.find(m => m._id === me._id) || me), members: members.map(safeMember), tasks };
+      return { full: false, version, club: safeClub(club), me: safeMember(members.find(m => m._id === me._id) || me), members: members.map(safeMember), tasks, templates };
     },
     async createClub(input, identity) {
       const name = text(input.name, '社团名称', 30);
@@ -109,7 +150,9 @@ function createService({ store, now, randomId, hash }) {
       const inviteHash = hash(token);
       await store.transaction(async tx => {
         if (await tx.get('clubs', clubId)) return;
-        await tx.put('clubs', clubId, { name, ownerId: memberKey(clubId, identity), inviteHash, createdAt: now(), syncVersion: 1, membersVersion: 1, tasksVersion: 0, inviteVersion: 1 });
+        const club = { _id: clubId, name, ownerId: memberKey(clubId, identity), inviteHash, createdAt: now(), syncVersion: 1, membersVersion: 1, tasksVersion: 0, inviteVersion: 1, templatesVersion: 1, templatesInitialized: true };
+        await tx.put('clubs', clubId, club);
+        await seedTemplate(tx, club, 1);
         await tx.put('invites', inviteHash, { clubId, token, createdAt: now() });
         await tx.put('members', memberKey(clubId, identity), { clubId, identity, name: nickname, role: 'owner', joinedAt: now(), syncVersion: 1 });
       });
@@ -159,6 +202,84 @@ function createService({ store, now, randomId, hash }) {
         const updated = Object.assign({}, me, { name, syncVersion: change.version });
         await tx.put('members', me._id, updated);
         return Object.assign(change, { member: safeMember(updated) });
+      });
+    },
+    async createTemplate(input, identity) {
+      const templateId = docKey('tpl_', input.clubId + ':' + identity, input.requestId);
+      return store.transaction(async tx => {
+        const me = await member(tx, input.clubId, identity);
+        const previous = await tx.get('templates', templateId);
+        if (previous) return unchanged(tx, input.clubId, { template: previous });
+        const fields = templateContent(input, await tx.find('members', { clubId: input.clubId }));
+        const change = await stamp(tx, input.clubId, 'templates');
+        const template = { ...fields, _id: templateId, clubId: input.clubId, creatorId: me._id, updatedBy: me._id, createdAt: now(), updatedAt: now(), revision: 1, syncVersion: change.version, archived: false };
+        await tx.put('templates', templateId, template);
+        return { ...change, template };
+      });
+    },
+    async editTemplate(input, identity) {
+      return store.transaction(async tx => {
+        const template = await tx.get('templates', input.templateId);
+        if (!template) fail('NOT_FOUND', '模板不存在');
+        const me = await member(tx, template.clubId, identity);
+        if (template.archived) fail('ARCHIVED', '模板已归档');
+        if (template.revision !== input.revision) fail('CONFLICT', '模板已被其他成员更新，请返回模板库后重新编辑');
+        const fields = templateContent(input, await tx.find('members', { clubId: template.clubId }));
+        const change = await stamp(tx, template.clubId, 'templates');
+        const updated = { ...template, ...fields, updatedBy: me._id, updatedAt: now(), revision: template.revision + 1, syncVersion: change.version };
+        await tx.put('templates', template._id, updated);
+        return { ...change, template: updated };
+      });
+    },
+    async archiveTemplate(input, identity) {
+      return store.transaction(async tx => {
+        const template = await tx.get('templates', input.templateId);
+        if (!template) fail('NOT_FOUND', '模板不存在');
+        const me = await member(tx, template.clubId, identity);
+        if (template.creatorId !== me._id && me.role !== 'owner') fail('FORBIDDEN', '仅模板创建者或社团创建者可以归档模板');
+        if (template.archived) return unchanged(tx, template.clubId, { template });
+        if (template.revision !== input.revision) fail('CONFLICT', '模板已更新，请刷新后重试');
+        const change = await stamp(tx, template.clubId, 'templates');
+        const updated = { ...template, archived: true, updatedAt: now(), updatedBy: me._id, revision: template.revision + 1, syncVersion: change.version };
+        await tx.put('templates', template._id, updated);
+        return { ...change, template: updated };
+      });
+    },
+    async createTaskGroup(input, identity) {
+      const taskId = docKey('tg_', input.clubId + ':' + identity, input.requestId);
+      return store.transaction(async tx => {
+        const me = await member(tx, input.clubId, identity);
+        const previous = await tx.get('tasks', taskId);
+        if (previous) {
+          const children = (await tx.find('tasks', { clubId: input.clubId })).filter(t => t.parentTaskId === taskId);
+          return unchanged(tx, input.clubId, { taskId, task: previous, tasks: [previous, ...children] });
+        }
+        if (input.parentTaskId) fail('VALIDATION', '模板只能用于创建主任务');
+        if (!Array.isArray(input.subtasks) || !input.subtasks.length || input.subtasks.length > MAX_STEPS) fail('VALIDATION', `请保留1—${MAX_STEPS}项子任务`);
+        const roster = await tx.find('members', { clubId: input.clubId });
+        const dueAt = deadline(input.dueAt);
+        const fields = { ...content(input), ...assignment(input, roster) };
+        let sourceTemplate;
+        if (input.templateId) {
+          const template = await tx.get('templates', input.templateId);
+          if (!template || template.clubId !== input.clubId) fail('NOT_FOUND', '模板不属于当前社团');
+          if (template.archived) fail('ARCHIVED', '模板已归档，请选择其他模板');
+          sourceTemplate = { id: template._id, name: template.name };
+        }
+        const children = input.subtasks.map((step, index) => {
+          if (!step || typeof step !== 'object') fail('VALIDATION', '子任务格式无效');
+          const daysBefore = offset(step.daysBefore);
+          const childDue = step.dueAt === undefined ? relativeDeadline(dueAt, daysBefore) : step.dueAt;
+          if (!Number.isSafeInteger(childDue) || childDue <= now()) fail('VALIDATION', `子任务${index + 1}的截止时间已过，请调整日期或提前天数`);
+          if (childDue > dueAt) fail('VALIDATION', `子任务${index + 1}不能晚于主任务截止`);
+          return { ...content(step), ...assignment(step, roster), dueAt: childDue, daysBefore };
+        });
+        const change = await stamp(tx, input.clubId, 'tasks');
+        const common = { clubId: input.clubId, creatorId: me._id, createdAt: now(), updatedAt: now(), revision: 1, syncVersion: change.version, archived: false, completions: {}, sharedCompletion: null };
+        const task = { ...fields, ...common, _id: taskId, dueAt, ...(sourceTemplate ? { sourceTemplate } : {}) };
+        const tasks = [task, ...children.map((child, index) => ({ ...child, ...common, _id: taskId + '_' + index, parentTaskId: taskId, parentCreatorId: me._id }))];
+        for (const item of tasks) await tx.put('tasks', item._id, item);
+        return { ...change, taskId, task, tasks };
       });
     },
     async createTask(input, identity) {

@@ -1,7 +1,7 @@
 // Isolated local storage for demos and domain tests; never used by the cloud API.
 const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
 function createMemoryStore(initial, persist) {
-  let data = copy(initial) || { clubs: {}, members: {}, tasks: {}, invites: {} };
+  let data = Object.assign({ clubs: {}, members: {}, tasks: {}, invites: {}, templates: {} }, copy(initial));
   let queue = Promise.resolve();
   const makeAdapter = state => ({
     async get(collection, id) { return copy(state[collection][id] || null); },

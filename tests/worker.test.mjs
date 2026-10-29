@@ -123,3 +123,23 @@ test('SQLite persists assigned subtasks and atomically archives the parent and a
   const delta=await api('sync',{clubId,since:persisted.version},alice.token);
   assert.equal(delta.tasks.filter(t=>t.archived&&[parent.taskId,child.taskId].includes(t._id)).length,2);
 });
+
+test('shared templates persist in SQLite and batch creation is atomic, repeatable and visible to assignees',async()=>{
+  const b=await api('bootstrap',{clubId},alice.token),seed=b.templates[0];
+  assert.deepEqual(seed.steps.map(s=>s.daysBefore),[4,3,3,2,1]);
+  const created=await api('createTemplate',{...seed,name:'SQLite 研讨班',category:'测试活动',requestId:'runtime-template',clubId},alice.token);
+  const input={...seed,clubId,templateId:created.template._id,requestId:'runtime-template-group',title:'Runtime seminar',dueAt:Date.now()+10*86400000,participantIds:[b.me.id],subtasks:seed.steps.map(s=>({...s,participantIds:[b.me.id]}))};
+  const before=await api('bootstrap',{clubId});
+  const invalid=await post('/api',{action:'createTaskGroup',input:{...input,subtasks:[...input.subtasks.slice(0,4),{...input.subtasks[4],participantIds:['foreign']}] }},alice.token);
+  assert.equal(invalid.status,400);assert.equal((await api('bootstrap',{clubId})).version,before.version);
+  const group=await api('createTaskGroup',input,alice.token);assert.equal(group.tasks.length,6);
+  assert.equal((await api('createTaskGroup',input,alice.token)).taskId,group.taskId);
+  const modified=await api('editTemplate',{...created.template,templateId:created.template._id,category:'学术分享'});
+  await mf.dispose();mf=new Miniflare(options);
+  const persisted=await api('bootstrap',{clubId},alice.token);
+  assert.equal(persisted.templates.find(t=>t._id===created.template._id).category,'学术分享');
+  assert.equal(persisted.tasks.filter(t=>t._id===group.taskId||t.parentTaskId===group.taskId).length,6);
+  assert.equal((await post('/api',{action:'editTemplate',input:{...created.template,templateId:created.template._id}},alice.token)).status,409);
+  await api('archiveTemplate',{templateId:created.template._id,revision:modified.template.revision},alice.token);
+  assert.equal((await api('bootstrap',{clubId},alice.token)).tasks.filter(t=>t.parentTaskId===group.taskId).length,5);
+});
