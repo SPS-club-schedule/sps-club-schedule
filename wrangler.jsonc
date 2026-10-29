@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sps-club-api",
+  "main": "server/worker.mjs",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "CLUB_SERVICE", "class_name": "ClubService" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ClubService"] }],
+  "vars": {
+    "ALLOWED_ORIGINS": "https://farawayshore.github.io",
+    "REGISTRATION_OPEN": "true"
+  },
+  "observability": { "enabled": false }
+}
