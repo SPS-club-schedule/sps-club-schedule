@@ -168,3 +168,62 @@ test('legacy records without cursors upgrade on first write; invalid cursor gets
   const full = await f.run('sync', { clubId: f.clubId, since: 999 }, 'owner');
   assert.equal(full.full, true); assert.equal(full.tasks.length, 1);
 });
+
+test('subtasks have independent assignees and deadlines, with parent links in each member calendar', async () => {
+  const { deadlineCalendar } = require('../shared/calendar');
+  const f = await fixture(); const parent = await f.create({ participantIds: [f.ids.owner] });
+  const alice = await f.create({ parentTaskId: parent.taskId, title: 'Alice work', participantIds: [f.ids.alice], dueAt: f.time()+3600000 });
+  const bob = await f.create({ parentTaskId: parent.taskId, title: 'Bob work', participantIds: [f.ids.bob], dueAt: f.time()+7200000 });
+  const board = await f.run('bootstrap', { clubId: f.clubId }, 'alice');
+  const views = board.tasks.map(t => taskView(t,board,f.time()));
+  assert.equal(views.find(t=>t._id===alice.taskId).parentTitle, '活动准备');
+  assert.deepEqual(deadlineCalendar(views,{mine:true,now:f.time()}).tasks.map(t=>t._id),[alice.taskId]);
+  await assert.rejects(f.run('complete',{taskId:bob.taskId,done:true},'alice'),{code:'FORBIDDEN'});
+  await f.run('complete',{taskId:alice.taskId,done:true},'alice');
+  assert.equal((await f.store.get('tasks',bob.taskId)).completions[f.ids.bob],undefined);
+  assert.deepEqual((await f.store.get('tasks',parent.taskId)).completions,{});
+});
+
+test('subtasks require an active same-club root and the parent publisher or owner permission', async () => {
+  const f = await fixture(); const parent = await f.create({},'alice');
+  await assert.rejects(f.create({parentTaskId:parent.taskId},'bob'),{code:'FORBIDDEN'});
+  const child = await f.create({parentTaskId:parent.taskId},'owner');
+  await assert.rejects(f.create({parentTaskId:child.taskId}),{code:'VALIDATION'});
+  await assert.rejects(f.create({parentTaskId:'missing'}),{code:'NOT_FOUND'});
+  const other = await f.run('createClub',{name:'Other',nickname:'Owner',requestId:'subtask-other-club'},'owner');
+  const otherBoard=await f.run('bootstrap',{clubId:other.clubId},'owner');
+  await assert.rejects(f.create({clubId:other.clubId,participantIds:[otherBoard.me.id],parentTaskId:parent.taskId}),{code:'NOT_FOUND'});
+  // Parent publisher retains management even when the club owner added the child.
+  await f.run('editTask',{taskId:child.taskId,title:'Updated by parent author',priority:'normal',dueAt:child.task.dueAt,revision:1},'alice');
+  await f.run('archiveTask',{taskId:parent.taskId},'alice');
+  await assert.rejects(f.create({parentTaskId:parent.taskId},'alice'),{code:'ARCHIVED'});
+});
+
+test('subtask reassignment is revision checked, club scoped and preserves completion history', async () => {
+  const f = await fixture(); const parent=await f.create();
+  const child=await f.create({parentTaskId:parent.taskId,participantIds:[f.ids.alice]});
+  const edit={taskId:child.taskId,title:child.task.title,priority:'normal',dueAt:child.task.dueAt,revision:1};
+  await assert.rejects(f.run('editTask',{...edit,participantIds:['foreign']},'owner'),{code:'VALIDATION'});
+  await assert.rejects(f.run('editTask',{...edit,participantIds:[]},'owner'),{code:'VALIDATION'});
+  const updated=await f.run('editTask',{...edit,participantIds:[f.ids.bob]},'owner');
+  await assert.rejects(f.run('editTask',{...edit,participantIds:[f.ids.alice]},'owner'),{code:'CONFLICT'});
+  await assert.rejects(f.run('complete',{taskId:child.taskId,done:true},'alice'),{code:'FORBIDDEN'});
+  const done=await f.run('complete',{taskId:child.taskId,done:true},'bob');
+  await assert.rejects(f.run('editTask',{...edit,revision:done.task.revision,participantIds:[f.ids.alice]},'owner'),{code:'CONFLICT'});
+  assert.deepEqual(updated.task.participantIds,[f.ids.bob]);
+});
+
+test('archiving a parent atomically archives children and sync returns every tombstone', async () => {
+  const f=await fixture(); const parent=await f.create();
+  const children=await Promise.all([f.create({parentTaskId:parent.taskId,participantIds:[f.ids.alice]}),f.create({parentTaskId:parent.taskId,participantIds:[f.ids.bob]})]);
+  await f.run('complete',{taskId:children[0].taskId,done:true},'alice');
+  const before=await f.board();
+  const archived=await f.run('archiveTask',{taskId:parent.taskId},'owner');
+  assert.equal(archived.tasks.length,3);
+  assert.ok(archived.tasks.every(t=>t.archived&&t.syncVersion===archived.version));
+  assert.ok(archived.tasks.find(t=>t._id===children[0].taskId).completions[f.ids.alice]);
+  assert.equal((await f.board()).tasks.length,0);
+  const delta=await f.run('sync',{clubId:f.clubId,since:before.version},'alice');
+  assert.equal(delta.tasks.length,3);
+  await assert.rejects(f.run('complete',{taskId:children[1].taskId,done:true},'bob'),{code:'ARCHIVED'});
+});

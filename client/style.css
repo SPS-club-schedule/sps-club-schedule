@@ -136,3 +136,9 @@ textarea { height: 105px; line-height: 1.6; }
 
 .entry { padding-top: 32.5px; }
 .brand-mark { width: 52px; height: 52px; background: #245b45; color: #fff; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; border-radius: 16px; margin-bottom: 25px; }
+
+/* Subtasks share the existing task cards and deadline calendar. */
+.parent-task-link { display: block; color: #527361; margin-top: 10px; overflow-wrap: anywhere; }
+.subtask-title { display: block; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.subtask-card .row { gap: 10px; flex-wrap: wrap; }
+.calendar-parent { display: block; margin-top: 2px; color: #748675; font-size: 10px; font-weight: 400; }

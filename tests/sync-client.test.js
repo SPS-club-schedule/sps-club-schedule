@@ -142,3 +142,15 @@ test('two clients converge without skipping a remote change before a local ackno
   await a.client.mutate('archiveTask', { taskId: t1.taskId }); await b.client.refresh({ force: true });
   assert.equal(b.client.getState().board.tasks.length, 1);
 });
+
+test('parent archive removes every subtask immediately and late child edits cannot resurrect them', async () => {
+  const parent=task(1,{_id:'parent'}),child=task(1,{_id:'child',parentTaskId:'parent'});
+  const late=deferred();
+  const h=harness(action=>action==='bootstrap'?snapshot(1,[parent,child]):action==='editTask'?late.promise:{baseVersion:2,version:3,club:snapshot().club,task:{...parent,revision:2,archived:true},tasks:[{...parent,revision:2,archived:true},{...child,revision:3,archived:true}]});
+  await h.client.refresh();
+  const pending=h.client.mutate('editTask',{});
+  await h.client.mutate('archiveTask',{});
+  assert.deepEqual(h.client.getState().board.tasks,[]);
+  late.resolve(mutation(1,{...child,revision:2,title:'Late title'}));await pending;
+  assert.deepEqual(h.client.getState().board.tasks,[]);
+});

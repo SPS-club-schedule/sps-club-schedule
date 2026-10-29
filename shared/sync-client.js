@@ -102,7 +102,7 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
   function acceptMutation(result) {
     if (!board || !board.club || !result.club || result.club.id !== board.club.id) return;
     const patch = {};
-    if (result.task) patch.tasks = mergeTasks(board.tasks, [result.task]);
+    if (result.tasks || result.task) patch.tasks = mergeTasks(board.tasks, result.tasks || [result.task]);
     if (result.member) {
       patch.members = mergeMembers(board.members, [result.member]);
       if (board.me.id === result.member.id) patch.me = patch.members.find(m => m.id === board.me.id);

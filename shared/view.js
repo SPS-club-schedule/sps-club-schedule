@@ -26,10 +26,11 @@ function taskView(task, board, now = Date.now()) {
   const done = count === total;
   const assigned = task.participantIds.includes(me.id);
   const myDone = task.mode === 'individual' ? !!task.completions[me.id] : done;
-  const canManage = me.role === 'owner' || me.id === task.creatorId;
+  const canManage = me.role === 'owner' || me.id === task.creatorId || me.id === task.parentCreatorId;
   const canToggle = task.mode === 'individual' ? assigned : done ? canManage || task.sharedCompletion.memberId === me.id : assigned;
   const creator = members.find(m => m.id === task.creatorId);
   return Object.assign({}, task, {
+    parentTitle: task.parentTaskId ? (board.tasks || []).find(t => t._id === task.parentTaskId)?.title || '主任务' : '',
     participants, count, total, done, assigned, myDone, canToggle, canManage,
     creatorName: creator ? creator.name : '社团成员',
     modeLabel: task.mode === 'individual' ? '逐人完成' : '协作完成',

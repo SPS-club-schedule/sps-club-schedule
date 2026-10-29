@@ -41,7 +41,7 @@ function createService({ store, now, randomId, hash }) {
     if (!['normal', 'high'].includes(input.priority)) fail('VALIDATION', '请选择任务优先级');
     return { title: text(input.title, '任务名称', 80), description: text(input.description || '', '任务说明', 2000, true), priority: input.priority };
   }
-  function canManage(task, me) { return task.creatorId === me._id || me.role === 'owner'; }
+  function canManage(task, me) { return task.creatorId === me._id || task.parentCreatorId === me._id || me.role === 'owner'; }
   // Cursor and changed document are written in the SAME transaction. A timestamp
   // cursor could skip simultaneous writes; this monotonic per-club cursor cannot.
   async function stamp(tx, clubId, kind, existing) {
@@ -175,8 +175,17 @@ function createService({ store, now, randomId, hash }) {
         const me = await member(tx, input.clubId, identity);
         const previous = await tx.get('tasks', taskId);
         if (previous) return unchanged(tx, input.clubId, { taskId, task: previous });
+        let parent = null;
+        if (input.parentTaskId != null && input.parentTaskId !== '') {
+          parent = await tx.get('tasks', input.parentTaskId);
+          if (!parent || parent.clubId !== input.clubId) fail('NOT_FOUND', '主任务不存在');
+          if (parent.archived) fail('ARCHIVED', '主任务已归档');
+          if (parent.parentTaskId) fail('VALIDATION', '请在主任务下添加子任务');
+          if (!canManage(parent, me)) fail('FORBIDDEN', '仅主任务发布者或社团创建者可以分配子任务');
+        }
         const change = await stamp(tx, input.clubId, 'tasks');
         const task = Object.assign(fields, {
+          ...(parent ? { parentTaskId: parent._id, parentCreatorId: parent.creatorId } : {}),
           _id: taskId, syncVersion: change.version,
           clubId: input.clubId, creatorId: me._id, participantIds, mode: input.mode,
           dueAt, createdAt: now(), updatedAt: now(), revision: 1, archived: false,
@@ -195,9 +204,21 @@ function createService({ store, now, randomId, hash }) {
         if (task.revision !== input.revision) fail('CONFLICT', '任务已被更新，请返回任务详情后重新编辑');
         // Existing past deadlines remain editable without silently shifting time.
         const dueAt = input.dueAt === task.dueAt ? task.dueAt : deadline(input.dueAt);
-        if (task.title === fields.title && task.description === fields.description && task.priority === fields.priority && task.dueAt === dueAt) return unchanged(tx, task.clubId, { taskId: task._id, task });
+        let participantIds = task.participantIds;
+        if (task.parentTaskId && input.participantIds !== undefined) {
+          if (!Array.isArray(input.participantIds) || !input.participantIds.length || input.participantIds.length > 200) fail('VALIDATION', '请选择1—200位参与成员');
+          const requested = [...new Set(input.participantIds)];
+          const changed = requested.length !== participantIds.length || requested.some(id => !participantIds.includes(id));
+          if (changed) {
+            if (Object.keys(task.completions).length || task.sharedCompletion) fail('CONFLICT', '子任务已有完成记录，请先撤销完成后再调整负责人');
+            const roster = await tx.find('members', { clubId: task.clubId });
+            if (requested.some(id => !roster.some(m => m._id === id))) fail('VALIDATION', '参与人必须是本社团成员');
+            participantIds = requested;
+          }
+        }
+        if (task.title === fields.title && task.description === fields.description && task.priority === fields.priority && task.dueAt === dueAt && participantIds === task.participantIds) return unchanged(tx, task.clubId, { taskId: task._id, task });
         const change = await stamp(tx, task.clubId, 'tasks');
-        const updated = Object.assign({}, task, fields, { dueAt, updatedAt: now(), revision: task.revision + 1, syncVersion: change.version });
+        const updated = Object.assign({}, task, fields, { dueAt, participantIds, updatedAt: now(), revision: task.revision + 1, syncVersion: change.version });
         await tx.put('tasks', task._id, updated);
         return Object.assign(change, { taskId: task._id, task: updated });
       });
@@ -232,10 +253,16 @@ function createService({ store, now, randomId, hash }) {
         const { task, me } = await taskAccess(tx, input.taskId, identity);
         if (!canManage(task, me)) fail('FORBIDDEN', '仅发布者或社团创建者可以归档任务');
         if (task.archived) return unchanged(tx, task.clubId, { task });
+        const children = task.parentTaskId ? [] : (await tx.find('tasks', { clubId: task.clubId, archived: false })).filter(t => t.parentTaskId === task._id);
         const change = await stamp(tx, task.clubId, 'tasks');
         const updated = Object.assign({}, task, { archived: true, updatedAt: now(), revision: task.revision + 1, syncVersion: change.version });
         await tx.put('tasks', task._id, updated);
-        return Object.assign(change, { ok: true, task: updated });
+        const tasks = [updated];
+        for (const child of children) {
+          const archived = Object.assign({}, child, { archived: true, updatedAt: now(), revision: child.revision + 1, syncVersion: change.version });
+          await tx.put('tasks', child._id, archived); tasks.push(archived);
+        }
+        return Object.assign(change, { ok: true, task: updated, tasks });
       });
     }
   };

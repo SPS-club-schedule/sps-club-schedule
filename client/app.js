@@ -67,7 +67,7 @@ async function route() {
   const page = url.pathname.slice(1), invitation = url.searchParams.get('invite');
   if (!api.user() && page !== 'auth') { go('/auth'); return; }
   if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : '/board'); return; }
-  s = { page, id: url.searchParams.get('id'), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId() };
+  s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId() };
   inviteKey = ''; window.scrollTo(0,0); render();
   if (['board','mine','task','members'].includes(page)) { stop = api.sync.watch(receive); return; }
   if (page === 'auth') return;
@@ -80,9 +80,15 @@ async function route() {
       const task = s.id ? b.tasks.find(t => t._id === s.id) : null;
       if (s.id && !task) throw new Error('任务不存在或已归档');
       if (task && !taskView(task,b).canManage) throw new Error('你无权修改这项任务');
-      const p = parts(task?.dueAt || Date.now()+86400000);
+      const parentId = task?.parentTaskId || s.parentId;
+      const parent = parentId ? b.tasks.find(t => t._id === parentId) : null;
+      if (parentId && (!parent || parent.parentTaskId)) throw new Error('主任务不存在或已归档');
+      if (!task && parent && !taskView(parent,b).canManage) throw new Error('仅主任务发布者或社团创建者可以分配子任务');
+      s.parent = parent;
+      s.canReassign = !!task?.parentTaskId && !Object.keys(task.completions).length && !task.sharedCompletion;
+      const p = parts(task?.dueAt || (parent?.dueAt > Date.now() ? parent.dueAt : Date.now()+86400000));
       s.editBoard = b; s.revision = task?.revision;
-      s.form = { title: task?.title || '', description: task?.description || '', date: p.date, time: task ? p.time : '20:00', mode: task?.mode || 'individual', priority: task?.priority || 'normal', participantIds: task?.participantIds.slice() || b.members.map(m=>m.id) };
+      s.form = { title: task?.title || '', description: task?.description || '', date: p.date, time: task || parent ? p.time : '20:00', mode: task?.mode || 'individual', priority: task?.priority || 'normal', participantIds: task?.participantIds.slice() || (parent ? [] : b.members.map(m=>m.id)) };
     }
     render();
   } catch (error) { if (ticket === generation) { s.error = error.message; render(); } }
@@ -116,7 +122,7 @@ root.addEventListener('submit', event => {
       api.setClub(result.clubId); go('/board');
     }
     if (kind === 'task') {
-      const result = await api.call(s.id?'editTask':'createTask', { ...data, dueAt: parseDeadline(data.date,data.time), clubId: s.editBoard.club.id, taskId: s.id, revision: s.revision, requestId: s.requestId });
+      const result = await api.call(s.id?'editTask':'createTask', { ...data, dueAt: parseDeadline(data.date,data.time), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId });
       go('/task?id='+encodeURIComponent(result.taskId));
     }
     if (kind === 'name') { await api.call('renameMe', { clubId: s.sync.board.club.id, name: data.nickname }); s.form.nickname = undefined; toast('称呼已更新'); }
@@ -159,7 +165,7 @@ root.addEventListener('click', event => {
       const t = taskView(raw,b);
       await api.call('complete', { taskId: id, done: !t.myDone }); toast(t.myDone?'已撤销完成':'已记录完成');
     }
-    if (action === 'archive' && await confirmAction('归档这项任务？','归档后将从看板隐藏，已有完成记录会保留。')) { await api.call('archiveTask', { taskId: s.id }); go('/board'); }
+    if (action === 'archive' && await confirmAction('归档这项任务？','归档后将从看板隐藏；如有子任务，也会一起归档。已有完成记录会保留。')) { await api.call('archiveTask', { taskId: s.id }); go('/board'); }
     if (action === 'rotateInvite' && await confirmAction('更换邀请码？','已有成员不受影响，旧邀请码和邀请链接将失效。')) { const result = await api.call('rotateInvite', { clubId: s.sync.board.club.id }); s.invite = result.token; }
     if (action === 'logout') { await api.logout(); go('/auth'); }
   });

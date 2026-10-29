@@ -107,3 +107,19 @@ test('gateway IP proofs preserve separate rate limits and reject spoofed or expi
   assert.equal((await attempt('192.0.2.251', true, true)).status, 429);
   assert.equal((await attempt('192.0.2.2')).status, 400);
 });
+
+test('SQLite persists assigned subtasks and atomically archives the parent and all child records', async () => {
+  const parent=await api('createTask',{clubId,requestId:'subtask-parent-runtime',title:'Runtime parent',description:'',dueAt:Date.now()+86400000,priority:'normal',mode:'individual',participantIds:memberIds});
+  const aliceBoard=await api('bootstrap',{clubId},alice.token);
+  const child=await api('createTask',{clubId,parentTaskId:parent.taskId,requestId:'subtask-child-runtime',title:'Assigned subtask',description:'',dueAt:Date.now()+3600000,priority:'normal',mode:'individual',participantIds:[aliceBoard.me.id]});
+  assert.equal(child.task.parentTaskId,parent.taskId);
+  assert.equal((await post('/api',{action:'complete',input:{taskId:child.taskId,done:true}},owner.token)).status,403);
+  await api('complete',{taskId:child.taskId,done:true},alice.token);
+  await mf.dispose(); mf=new Miniflare(options);
+  const persisted=await api('bootstrap',{clubId},alice.token);
+  assert.ok(persisted.tasks.find(t=>t._id===child.taskId).completions[aliceBoard.me.id]);
+  const archived=await api('archiveTask',{taskId:parent.taskId});
+  assert.equal(archived.tasks.length,2);
+  const delta=await api('sync',{clubId,since:persisted.version},alice.token);
+  assert.equal(delta.tasks.filter(t=>t.archived&&[parent.taskId,child.taskId].includes(t._id)).length,2);
+});
