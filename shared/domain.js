@@ -3,6 +3,7 @@ const { seminarTemplate, relativeDeadline, MAX_STEPS } = require('./templates');
 const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments');
 const { isAdmin } = require('./permissions');
 const { resolveParticipants } = require('./assignments');
+const { validDurationMinutes } = require('./template-duration');
 
 // Shared by the cloud function and the local demonstration. Identity is injected
 // by the adapter; no action trusts a member ID supplied as the caller.
@@ -77,10 +78,13 @@ function createService({ store, now, randomId, hash }) {
     if (!Number.isInteger(value) || value < 0 || value > 365) fail('VALIDATION', '提前天数须为0—365的整数');
     return value;
   }
-  function templateContent(input, roster) {
+  function templateContent(input, roster, previous = null) {
     if (!Array.isArray(input.steps) || !input.steps.length || input.steps.length > MAX_STEPS) fail('VALIDATION', `模板须包含1—${MAX_STEPS}项子任务`);
     const main = assignment(input, roster, { optional: true, template: true });
+    const durationMinutes=input.durationMinutes===undefined?previous?.durationMinutes ?? null:input.durationMinutes;
+    if (durationMinutes!==null && !validDurationMinutes(durationMinutes)) fail('VALIDATION','默认时长须为正整数分钟，且不能超过五年');
     return {
+      durationMinutes,
       name: text(input.name, '模板名称', 80), category: text(input.category || '', '分类', 30, true) || '未分类',
       ...content(input), ...main,
       steps: input.steps.map(step => {
@@ -272,7 +276,7 @@ function createService({ store, now, randomId, hash }) {
         const me = await member(tx, template.clubId, identity);
         if (template.archived) fail('ARCHIVED', '模板已归档');
         if (template.revision !== input.revision) fail('CONFLICT', '模板已被其他成员更新，请返回模板库后重新编辑');
-        const fields = templateContent(input, await tx.find('members', { clubId: template.clubId }));
+        const fields = templateContent(input, await tx.find('members', { clubId: template.clubId }),template);
         const change = await stamp(tx, template.clubId, 'templates');
         const updated = { ...template, ...fields, updatedBy: me._id, updatedAt: now(), revision: template.revision + 1, syncVersion: change.version };
         await tx.put('templates', template._id, updated);

@@ -21,7 +21,7 @@ function relativeDeadline(mainDueAt, daysBefore) {
 function templateDraft(template, members) {
   const ids = new Set(members.map(m => m.id));
   const copy = item => ({ title: item.title, description: item.description, mode: item.mode, priority: item.priority, participantDepartment: item.participantDepartment || '', participantIds: resolveParticipants({ ...item, followMain: false }, members).filter(id => ids.has(id)) });
-  return { ...copy(template), steps: template.steps.map(step => ({ ...copy(step), followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
+  return { ...copy(template), durationMinutes:template.durationMinutes ?? null, steps: template.steps.map(step => ({ ...copy(step), followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
 }
 function draftDeadline(main, step) {
   return step.customDeadline ? parseDeadline(step.date, step.time) : relativeDeadline(parseDeadline(main.date, main.time), step.daysBefore);

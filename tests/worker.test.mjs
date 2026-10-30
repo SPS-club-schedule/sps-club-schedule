@@ -348,3 +348,17 @@ test('optional duration, automatic deadlines and later manual overrides survive 
   const removed=await api('editTask',{...shifted.task,taskId:t._id,startsAt:null,endsAt:null});
   assert.equal(removed.task.startsAt,null); assert.equal(removed.task.dueAt,startsAt-86400000);
 });
+
+test('template default duration survives SQLite restart, delta sync, copying and explicit removal',async()=>{
+  const before=await api('bootstrap',{clubId});
+  const base=before.templates[0];
+  const {template}=await api('createTemplate',{...base,clubId,requestId:'template-duration-runtime',name:'默认150分钟',durationMinutes:150});
+  await mf.dispose(); mf=new Miniflare(options);
+  const delta=await api('sync',{clubId,since:before.version});
+  assert.equal(delta.templates.find(t=>t._id===template._id).durationMinutes,150);
+  const copy=await api('createTemplate',{...template,requestId:'template-duration-runtime-copy'});
+  assert.equal(copy.template.durationMinutes,150);
+  assert.equal((await post('/api',{action:'editTemplate',input:{...template,templateId:template._id,durationMinutes:0}},owner.token)).status,400);
+  const cleared=await api('editTemplate',{...template,templateId:template._id,durationMinutes:null});
+  assert.equal(cleared.template.durationMinutes,null);
+});

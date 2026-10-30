@@ -140,6 +140,38 @@ test('relative dates cross month/year and leap boundaries; custom dates stay fix
   assert.throws(()=>relativeDeadline(parseDeadline('2026-11-06','18:30'),''));
 });
 
+test('templates persist, copy and sync a default duration; old-client edits preserve it and clearing is explicit',async()=>{
+  const f=await fixture(), before=await f.board();
+  let t=(await f.run('createTemplate',{...seminarTemplate(),durationMinutes:150,clubId:f.clubId,requestId:'duration-template'},'alice')).template;
+  assert.equal(t.durationMinutes,150);
+  assert.equal(templateDraft(t,before.members).durationMinutes,150);
+  assert.equal((await f.run('sync',{clubId:f.clubId,since:before.version},'owner')).templates[0].durationMinutes,150);
+  const clone=await f.run('createTemplate',{...t,requestId:'duration-template-copy'},'owner');
+  assert.equal(clone.template.durationMinutes,150);
+  const {durationMinutes,...oldClient}=t;
+  t=(await f.run('editTemplate',{...oldClient,templateId:t._id,name:'旧客户端改名'},'owner')).template;
+  assert.equal(t.durationMinutes,150);
+  t=(await f.run('editTemplate',{...t,templateId:t._id,durationMinutes:30},'alice')).template;
+  assert.equal(t.durationMinutes,30); assert.equal(clone.template.durationMinutes,150);
+  t=(await f.run('editTemplate',{...t,templateId:t._id,durationMinutes:null},'owner')).template;
+  assert.equal(t.durationMinutes,null);
+  assert.equal(templateDraft(f.template,before.members).durationMinutes,null);
+});
+
+test('invalid template durations fail atomically and later template edits never change published time ranges',async()=>{
+  const f=await fixture(), original=f.store.snapshot();
+  for(const durationMinutes of [0,-1,1.5,'90',true,{},5*366*24*60+1]) {
+    await assert.rejects(f.run('createTemplate',{...seminarTemplate(),durationMinutes,clubId:f.clubId,requestId:'bad-duration-template'},'owner'),{code:'VALIDATION'});
+  }
+  assert.deepEqual(f.store.snapshot(),original);
+  const startsAt=parseDeadline('2026-11-06','18:30');
+  const group=await f.run('createTaskGroup',{...f.group(),startsAt,endsAt:startsAt+150*60000,deadlineFollowsStart:true},'owner');
+  await f.run('editTemplate',{...f.template,templateId:f.template._id,durationMinutes:60},'owner');
+  const published=(await f.board()).tasks.find(t=>t._id===group.taskId);
+  assert.equal(published.endsAt,startsAt+150*60000);
+  assert.ok(group.tasks.slice(1).every(t=>t.startsAt===null&&t.endsAt===null));
+});
+
 test('template views escape shared names, categories and step content and handle missing-template errors',async()=>{
   const {buildSync}=require('esbuild');
   const bundled=buildSync({entryPoints:['client/template-views.js'],bundle:true,format:'esm',write:false});

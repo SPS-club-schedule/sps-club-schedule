@@ -111,3 +111,42 @@ test('duration editor and detail render only on main tasks; older and child reco
   assert.ok(detail.includes('持续时段')); assert.ok(detail.includes('2026-11-01 12:00 — 14:00'));
   assert.equal(taskView({...created.task,parentTaskId:'parent'},b).durationLabel,'');
 });
+
+test('template duration computes end across year/leap boundaries, keeps a manual deadline and supports manual end overrides',()=>{
+  const {applyTemplateDuration,followDuration}=require('../shared/schedule-draft');
+  const f={date:'2026-12-31',time:'23:30'};
+  applyTemplateDuration(f,150);
+  assert.equal(f.hasDuration,true); assert.equal(f.endDate,'2027-01-01'); assert.equal(f.endTime,'02:00');
+  changeScheduleField(f,'startDate','2028-02-28');
+  assert.equal(f.endDate,'2028-02-29'); assert.equal(f.date,'2028-02-28');
+  changeScheduleField(f,'time','20:00');
+  changeScheduleField(f,'startTime','22:30');
+  assert.equal(f.endTime,'01:00'); assert.equal(f.time,'20:00');
+  changeScheduleField(f,'endTime','03:00');
+  changeScheduleField(f,'startTime','23:00');
+  assert.equal(f.endTime,'03:00'); assert.equal(f.endFollowsDuration,false);
+  followDuration(f); assert.equal(f.endTime,'01:30'); assert.equal(f.time,'20:00');
+  applyTemplateDuration(f,30); assert.equal(f.startTime,'23:00'); assert.equal(f.endDate,'2028-02-28'); assert.equal(f.endTime,'23:30'); assert.equal(f.time,'20:00');
+  applyTemplateDuration(f,null); assert.equal(f.hasDuration,false);
+  assert.equal(scheduleFields(f).endsAt,null);
+});
+
+test('template duration form round-trips hours/minutes and rejects blank, fractional or invalid enabled durations',()=>{
+  const {templateDurationForm,templateDurationValue,durationText}=require('../shared/template-duration');
+  for(const minutes of [1,30,60,150,1560]) assert.equal(templateDurationValue(templateDurationForm(minutes)),minutes);
+  assert.equal(templateDurationValue(templateDurationForm(null)),null);
+  assert.equal(durationText(150),'2 小时 30 分钟');
+  for(const [hours,minutes] of [['',30],[1,''],[1.5,0],[-1,30],[0,60],[0,0],[0,1.5]]) assert.throws(()=>templateDurationValue({templateHasDuration:true,durationHours:hours,durationMinutesPart:minutes}));
+});
+
+test('template editor exposes a default duration and task editor explains calculated versus manually overridden end',async()=>{
+  const {buildSync}=require('esbuild'), {templateDurationForm}=require('../shared/template-duration');
+  const bundle=buildSync({entryPoints:['client/views.js'],bundle:true,format:'esm',write:false});
+  const views=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+  const b={members:[],templates:[]}, f={...templateDurationForm(150),participantIds:[]};
+  const template=views.templateEditor({form:f,editBoard:b,steps:[]});
+  assert.ok(template.includes('默认持续时长')); assert.ok(template.includes('name="durationHours"')); assert.ok(template.includes('value="30"'));
+  const draft={...f,hasDuration:true,durationMinutes:150,endFollowsDuration:true};
+  assert.ok(views.editor({form:draft,editBoard:b,steps:[]}).includes('按模板时长 2 小时 30 分钟 自动计算结束时间'));
+  assert.ok(views.editor({form:{...draft,endFollowsDuration:false},editBoard:b,steps:[]}).includes('恢复按模板时长计算'));
+});

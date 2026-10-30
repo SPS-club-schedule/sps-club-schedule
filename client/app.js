@@ -6,7 +6,8 @@ import { templateDraft, draftDeadline, MAX_STEPS } from '../shared/templates';
 import { isAdmin } from '../shared/permissions';
 import { departmentLabel, invitationToken } from '../shared/departments';
 import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain } from '../shared/assignments';
-import { scheduleDraft, enableDuration, followStart, changeScheduleField, scheduleFields } from '../shared/schedule-draft';
+import { scheduleDraft, enableDuration, followStart, followDuration, applyTemplateDuration, changeScheduleField, scheduleFields } from '../shared/schedule-draft';
+import { templateDurationForm, templateDurationValue } from '../shared/template-duration';
 const root = document.getElementById('app');
 let stop = null, generation = 0, inviteKey = '';
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
@@ -145,7 +146,7 @@ async function route() {
       const draft=template?templateDraft(template,b.members):{title:'',description:'',mode:'individual',priority:'normal',participantIds:[],steps:[]};
       s.steps=draft.steps;
       const { steps, ...main }=draft;
-      s.form={...main,name:template?(s.id?template.name:template.name.slice(0,76)+'（副本）'):'',category:template?.category || '未分类'};
+      s.form={...main,...templateDurationForm(template?.durationMinutes),name:template?(s.id?template.name:template.name.slice(0,76)+'（副本）'):'',category:template?.category || '未分类'};
       s.editBoard = b;
     }
     render();
@@ -157,6 +158,7 @@ function applyTemplate() {
   const draft=templateDraft(template,s.editBoard.members);
   const { steps, ...main }=draft;
   s.form={...s.form,...main,participantIds:main.participantDepartment || main.participantIds.length?main.participantIds:s.editBoard.members.map(m=>m.id)};
+  applyTemplateDuration(s.form,main.durationMinutes);
   s.steps=steps; s.openSteps=new Set(); s.appliedTemplate={id:template._id,name:template.name};
 }
 const taskFields = f => ({ title:f.title,description:f.description,mode:f.mode,priority:f.priority,participantIds:f.participantIds,participantDepartment:f.participantDepartment || '' });
@@ -222,6 +224,7 @@ root.addEventListener('submit', event => {
       api.setClub(result.clubId); go('/board'); if (result.department) toast('已加入'+departmentLabel(result.department));
     }
     if (kind === 'task') {
+      if (data.hasDuration && data.endFollowsDuration) followDuration(data);
       if (data.hasDuration && data.deadlineFollowsStart) followStart(data);
       const group=!s.id&&!s.parent&&s.steps.length>0;
       const subtasks=group?s.steps.map((step,index)=>{
@@ -234,7 +237,7 @@ root.addEventListener('submit', event => {
       go('/task?id='+encodeURIComponent(result.taskId));
     }
     if (kind === 'template') {
-      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),name:data.name,category:data.category,steps:s.steps.map(step=>({...taskFields(step),followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
+      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),durationMinutes:templateDurationValue(data),name:data.name,category:data.category,steps:s.steps.map(step=>({...taskFields(step),followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
       go('/templates'); toast('共享模板已保存');
     }
     if (kind === 'name') { await api.call('renameMe', { clubId: s.sync.board.club.id, name: data.nickname }); s.form.nickname = undefined; toast('称呼已更新'); }
@@ -245,10 +248,12 @@ root.addEventListener('click', event => {
   const { action, value, id } = el.dataset;
   if (s.busy) return;
   if (action==='duration') { enableDuration(s.form,value==='true'); render(); return; }
+  if (action==='templateDuration') { s.form.templateHasDuration=value==='true'; render(); return; }
+  if (action==='followDuration') { perform(async()=>followDuration(s.form)); return; }
   if (action==='followStart') { followStart(s.form); render(); return; }
   if (action==='applyTemplate') {
     perform(async()=>{
-      if ((s.form.title || s.steps.length) && !await confirmAction('套用这个模板？','将替换当前草稿的名称、说明、分工和子任务，保留主任务截止日期。')) return;
+      if ((s.form.title || s.steps.length) && !await confirmAction('套用这个模板？','将替换当前草稿的名称、说明、分工、默认时长和子任务，沿用已选择的开始或截止时间。')) return;
       applyTemplate();
     }); return;
   }
