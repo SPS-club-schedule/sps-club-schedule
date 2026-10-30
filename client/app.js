@@ -14,6 +14,7 @@ import {workspace} from './workspace';
 import {shiftDate,selectedScope} from '../shared/planner';
 import {archivePath,parentPath,MAX_FILE_BYTES} from '../shared/experience';
 import {experienceRoute} from './experience';
+import {startReleaseUpdates} from './release-updates';
 import {documentKind,documentTemplate,MAX_DOCUMENT_BYTES,documentDirty,readDocument,loadDocumentRenderer,previewDocument} from './experience-document';
 const root = document.getElementById('app');
 const desktop=window.matchMedia('(min-width: 1000px)');
@@ -592,6 +593,7 @@ async function start() {
     if (!response.ok) throw new Error('配置加载失败，请刷新页面');
     const config = await response.json(); api.configure(config.apiBase);configureBooking(config.bookingApiBase);
     api.sync.setVisible(!document.hidden); api.sync.setOnline(navigator.onLine); await route();
+    startReleaseUpdates({safe:()=>!s.busy&&!s.recovery&&!s.resetLink&&!s.resetToken&&!s.experienceDocument?.editing&&!s.experienceFiles?.length&&!root.querySelector('form')&&!document.querySelector('dialog[open]')&&!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')});
   } catch (error) { root.innerHTML = `<section class="page"><h1 class="h1">暂时无法连接</h1><p class="error">${views.e(error.message)}</p><button data-action="reload">重新加载</button></section>`; }
 }
 start();
