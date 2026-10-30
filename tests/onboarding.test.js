@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {tutorialKey,tutorialPreferences,canOfferTutorial,spotlightLayout} from '../shared/onboarding.js';
+import {tutorialKey,tutorialPreferences,canOfferTutorial,spotlightLayout,tutorialDrafts} from '../shared/onboarding.js';
 
 test('skipping or completing is remembered per account and club across reloads',()=>{
   const values=new Map(), storage=()=>({getItem:key=>values.get(key),setItem:(key,value)=>values.set(key,value)});
@@ -53,4 +53,36 @@ test('phone and keyboard-sized viewports keep the coach inside the screen and ou
     for(const rect of [hole,...shades])assert.ok(rect.width>=0&&rect.height>=0);
     assert.equal(shades.reduce((sum,r)=>sum+r.width*r.height,0)+hole.width*hole.height,viewport.width*viewport.height);
   }
+});
+
+
+test('Previous parks the entire new-task draft without changing it or mixing memberships',()=>{
+  const store=tutorialDrafts(),key=tutorialKey('alice','club');
+  const draft={page:'edit',editBoard:{},form:{title:'Seminar',participantIds:['alice'],hasDuration:true},steps:[{title:'Poster',participantIds:['bob']}],openSteps:new Set([0]),requestId:'same-operation',selectedTemplate:'',appliedTemplate:{id:'seminar'}};
+  store.capture(draft,key);
+  draft.form.title='later';draft.steps[0].title='later';draft.openSteps.clear();
+  assert.equal(store.hasDraft(key),true);
+  assert.equal(store.takeTask(tutorialKey('bob','club')),undefined);
+  const restored=store.takeTask(key);
+  assert.equal(restored.form.title,'Seminar');assert.equal(restored.steps[0].title,'Poster');
+  assert.deepEqual(restored.openSteps,new Set([0]));assert.equal(restored.requestId,'same-operation');
+  assert.equal(store.hasDraft(key),false);assert.equal(store.takeTask(key),undefined);
+  store.capture({...draft,id:'published-task'},key);assert.equal(store.takeTask(key),undefined);
+  store.capture({...draft,parentId:'parent'},key);assert.equal(store.takeTask(key),undefined);
+});
+
+test('experience practice drafts remain separate from task drafts and restore exactly once',()=>{
+  const store=tutorialDrafts(),key=tutorialKey('alice','club');
+  const doc={source:'# Notes\n$E=mc^2$',original:'',path:'学术部/笔记.md',editing:true,newFile:true,requestId:'document-operation'};
+  store.capture({page:'experience',experienceDocument:doc},key);
+  doc.source='changed after parking';
+  store.capture({page:'edit',editBoard:{},form:{title:'Seminar'},steps:[],openSteps:new Set()},key);
+  assert.equal(store.hasDocument(key),true);
+  assert.equal(store.takeDocument(tutorialKey('alice','another-club')),undefined);
+  assert.equal(store.takeTask(key).form.title,'Seminar');assert.equal(store.hasDraft(key),true);
+  const restored=store.takeDocument(key);
+  assert.equal(restored.source,'# Notes\n$E=mc^2$');assert.equal(restored.requestId,'document-operation');
+  assert.equal(store.hasDraft(key),false);assert.equal(store.takeDocument(key),undefined);
+  store.capture({page:'experience',experienceDocument:{...doc,editing:false}},key);
+  assert.equal(store.hasDocument(key),false);
 });

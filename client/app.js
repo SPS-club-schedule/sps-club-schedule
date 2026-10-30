@@ -16,9 +16,19 @@ import {archivePath,parentPath,MAX_FILE_BYTES} from '../shared/experience';
 import {experienceRoute} from './experience';
 import {startReleaseUpdates} from './release-updates';
 import {createTutorial} from './onboarding';
+import {tutorialDrafts,tutorialKey} from '../shared/onboarding';
 import {documentKind,documentTemplate,MAX_DOCUMENT_BYTES,documentDirty,readDocument,loadDocumentRenderer,previewDocument} from './experience-document';
 const root = document.getElementById('app');
-const tutorial=createTutorial({navigate:go});
+const guideDrafts=tutorialDrafts();
+let guideRestoreDocument;
+const guideKey=()=>tutorialKey(api.user()?.id,api.clubId());
+const tutorial=createTutorial({hasDocumentDraft:()=>guideDrafts.hasDocument(guideKey()),navigate:(path,{restoreDocument=false}={})=>{
+  guideDrafts.capture(s,guideKey());
+  guideRestoreDocument=restoreDocument;
+  // The draft was parked above and will be restored on return, not discarded.
+  if(s.experienceDocument?.editing)s.experienceDocument=null;
+  go(path);
+}});
 const desktop=window.matchMedia('(min-width: 1000px)');
 const workspaceUi={calendarOpen:false,context:'board',clubId:'',planner:{date:parts(Date.now()).date,mode:desktop.matches?'week':'day',showDeadlines:true}};
 let stop = null, generation = 0, inviteKey = '', adminLoad = 0;
@@ -150,6 +160,7 @@ async function loadBooking() {
   finally {if(ticket===generation){s.bookingLoading=false;render();}}
 }
 async function route() {
+  const restoreGuideDocument=guideRestoreDocument!==false;guideRestoreDocument=undefined;
   if(documentDirty(s.experienceDocument)&&location.hash!==activeRouteHash) {
     const target=location.hash;
     history.replaceState(null,'',activeRouteHash||'#/experience');
@@ -179,7 +190,9 @@ async function route() {
   if(page==='experience') {
     if(api.user()){try{await api.bootstrap();if(ticket!==generation)return;s.sync=api.sync.getState();}catch(error){if(ticket!==generation)return;s.error=error.message;}}
     await loadExperience();
-    if(ticket===generation&&s.experienceDocumentId)await perform(async()=>{
+    const parked=ticket===generation&&restoreGuideDocument&&!s.experienceDocumentId&&!s.experiencePath?guideDrafts.takeDocument(guideKey()):null;
+    if(parked){s.experienceDocument=parked;await loadDocumentRenderer();if(ticket===generation)render();}
+    else if(ticket===generation&&s.experienceDocumentId)await perform(async()=>{
       const item=s.experience?.entries.find(x=>x.id===s.experienceDocumentId&&!x.removed);
       if(!item||!documentKind(item.path))throw new Error('此文档不可在线查看，请返回目录刷新或下载文件');
       const doc=await readDocument(item);if(ticket===generation)s.experienceDocument=doc;
@@ -207,6 +220,7 @@ async function route() {
       s.form = { title: task?.title || '', description: task?.description || '', date: p.date, time: task || parent ? p.time : '20:00', mode: task?.mode || 'individual', priority: task?.priority || 'normal', participantIds: task?.participantIds.slice() || (parent ? [] : b.members.map(m=>m.id)) };
       Object.assign(s.form,scheduleDraft(task));
       if (!task && !parent && s.selectedTemplate) applyTemplate();
+      if(!task&&!parent&&!s.selectedTemplate)Object.assign(s,guideDrafts.takeTask(guideKey())||{});
     }
     if (page === 'template-edit') {
       if (!b.club) { go('/entry'); return; }
@@ -584,7 +598,7 @@ root.addEventListener('click', event => {
   });
 });
 window.addEventListener('hashchange', route);
-window.addEventListener('beforeunload',event=>{if(documentDirty(s.experienceDocument)){event.preventDefault();event.returnValue='';}});
+window.addEventListener('beforeunload',event=>{if(documentDirty(s.experienceDocument)||guideDrafts.hasDraft(guideKey())){event.preventDefault();event.returnValue='';}});
 window.addEventListener('sps:logged-out', () => go(s.page==='experience'?experienceRoute(s.experiencePath):'/auth'));
 window.addEventListener('online', () => api.sync.setOnline(true));
 window.addEventListener('offline', () => api.sync.setOnline(false));
@@ -597,7 +611,7 @@ async function start() {
     if (!response.ok) throw new Error('配置加载失败，请刷新页面');
     const config = await response.json(); api.configure(config.apiBase);configureBooking(config.bookingApiBase);
     api.sync.setVisible(!document.hidden); api.sync.setOnline(navigator.onLine); await route();
-    startReleaseUpdates({safe:()=>!tutorial.active&&!s.busy&&!s.recovery&&!s.resetLink&&!s.resetToken&&!s.experienceDocument?.editing&&!s.experienceFiles?.length&&!root.querySelector('form')&&!document.querySelector('dialog[open]')&&!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')});
+    startReleaseUpdates({safe:()=>!tutorial.active&&!guideDrafts.hasDraft(guideKey())&&!s.busy&&!s.recovery&&!s.resetLink&&!s.resetToken&&!s.experienceDocument?.editing&&!s.experienceFiles?.length&&!root.querySelector('form')&&!document.querySelector('dialog[open]')&&!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')});
   } catch (error) { root.innerHTML = `<section class="page"><h1 class="h1">暂时无法连接</h1><p class="error">${views.e(error.message)}</p><button data-action="reload">重新加载</button></section>`; }
 }
 start();

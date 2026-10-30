@@ -19,9 +19,12 @@
 .guide-top button{white-space:nowrap;padding:5px 8px}
 .guide-coach h2{font-size:19px;line-height:1.45;margin:10px 0;outline:none}
 .guide-coach p{font-size:14px;line-height:1.75;margin:8px 0 14px;color:#52695e}
-.guide-actions{justify-content:flex-end}
+.guide-actions{justify-content:space-between;flex-wrap:wrap}.guide-actions [data-guide="previous"]{flex-shrink:0}.guide-actions .guide-prompt{flex:1;min-width:150px}
 .guide-actions button{padding:9px 14px}
 .guide-prompt{color:#245b45;font-size:12px;font-weight:600}
 body.member-guide-active{scroll-behavior:auto}
 body.member-guide-active [data-tour="task-people"],body.member-guide-active [data-tour="child-people"]{max-height:250px;overflow:auto;padding:4px;overscroll-behavior:contain}
 @media(max-width:600px){.guide-coach{padding:14px}.guide-coach h2{font-size:17px;margin:6px 0}.guide-coach p{font-size:13px;margin:6px 0 10px}}
+
+body.member-guide-active .experience-list,body.member-guide-active [data-document-preview]{max-height:280px;overflow:auto;overscroll-behavior:contain}
+body.member-guide-active .document-source{min-height:180px;height:220px}

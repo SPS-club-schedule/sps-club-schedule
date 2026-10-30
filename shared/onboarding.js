@@ -26,6 +26,26 @@ export function canOfferTutorial(s, accountId) {
     !s.busy && !s.recovery && !s.error;
 }
 
+// Only explicit guide navigation parks drafts. Normal unsaved-document prompts
+// still apply. Copies are isolated by account + club and consumed on restoration.
+export function tutorialDrafts() {
+  const tasks=new Map(),documents=new Map();
+  return {
+    capture(s,key) {
+      if(!key)return;
+      if(s.page==='edit'&&!s.id&&!s.parentId&&s.editBoard) {
+        const fields=['form','steps','openSteps','requestId','selectedTemplate','appliedTemplate'];
+        tasks.set(key,structuredClone(Object.fromEntries(fields.map(k=>[k,s[k]]))));
+      }
+      if(s.page==='experience'&&s.experienceDocument?.editing)documents.set(key,structuredClone(s.experienceDocument));
+    },
+    takeTask(key){const draft=tasks.get(key);tasks.delete(key);return draft;},
+    hasDraft(key){return tasks.has(key)||documents.has(key);},
+    hasDocument(key){return documents.has(key);},
+    takeDocument(key){const draft=documents.get(key);documents.delete(key);return draft;}
+  };
+}
+
 // Keep the coach beside the real control when space permits; on phones place it
 // above/below. Four opaque hit areas leave the highlighted control interactive.
 export function spotlightLayout(rect, viewport, card) {

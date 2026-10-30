@@ -10,7 +10,7 @@ export function workspace(s,content,ui) {
   const editing=['edit','template-edit'].includes(s.page),calendarRoute=s.page==='calendar';
   const hasPanel=editing || ui.calendarOpen || calendarRoute || experienceRoute;
   const contextPage=s.page==='template-edit'?'templates':ui.context==='mine'?'mine':'board';
-  const canGuide=['board','mine','calendar'].includes(s.page)||s.page==='edit'&&!s.id&&!s.parentId;
+  const canGuide=['board','mine','calendar'].includes(s.page)||s.page==='experience'&&!s.experienceDocument||s.page==='edit'&&!s.id&&!s.parentId;
   const context={...s,guideHidden:!canGuide,page:contextPage,error:'',sync:{...s.sync,board:b},search:s.contextSearch||'',filter:s.contextFilter||'all'};
   const terminal=experienceRoute?experienceDirectory(s):editing||calendarRoute?(contextPage==='templates'?views.templates(context):views.board(context,contextPage==='mine')):content;
   const active=editing?(s.page==='template-edit'?'templates':'board'):calendarRoute?'calendar':s.page.startsWith('admin')?'admin':s.page;
