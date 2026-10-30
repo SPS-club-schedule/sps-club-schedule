@@ -1,6 +1,7 @@
 const {parts,parseDeadline,hasDuration,taskView}=require('./view');
 const {canViewClubDeadlines}=require('./permissions');
 const {DEPARTMENTS}=require('./departments');
+const {isBookingActivity}=require('./booking-activities');
 const DAY=86400000;
 function calendarPolicy(me={}) {
   const broad=canViewClubDeadlines(me.role);
@@ -27,7 +28,7 @@ function calendarEntries(board,{scope,showDeadlines=true,activities=[]}={},now=D
         people:task.participantIds.filter(id=>ids.has(id)).map(id=>board.members.find(m=>m.id===id)?.name||'已离开的成员').join('、'),overdue:task.dueAt<now});
     }
   }
-  for(const activity of activities)if(activity.club!=='SPS'&&hasDuration(activity))entries.push({...activity,key:'external:'+activity.id,kind:'external'});
+  for(const activity of activities)if(isBookingActivity(activity))entries.push({...activity,key:'external:'+activity.id,kind:'external'});
   return {scope,entries};
 }
 function compactTasks(board,scope,now=Date.now()) {

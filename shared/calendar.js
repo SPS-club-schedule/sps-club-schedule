@@ -1,4 +1,5 @@
 const { parts, parseDeadline, hasDuration } = require('./view');
+const {isBookingActivity}=require('./booking-activities');
 
 // Calendar arithmetic uses UTC month anchors; deadlines use the app's UTC+8 dates.
 function shiftMonth(month, amount) {
@@ -11,7 +12,7 @@ function deadlineCalendar(tasks, { mine = false, month, date = '', now = Date.no
   const today = parts(now).date;
   month = month || today.slice(0, 7);
   const own = tasks.filter(t => !t.archived && (mine ? t.assigned && !t.myDone : !t.done));
-  const external=activities.filter(t=>t.club!=='SPS' && Number.isSafeInteger(t.startsAt) && Number.isSafeInteger(t.endsAt) && t.endsAt>t.startsAt).map(t=>({...t,external:true}));
+  const external=activities.filter(isBookingActivity).map(t=>({...t,external:true}));
   const pending = [...own,...external]
     .slice().sort((a, b) => a.dueAt - b.dueAt || a.title.localeCompare(b.title, 'zh-CN'));
   const monthStart=parseDeadline(month+'-01','00:00'), monthEnd=parseDeadline(shiftMonth(month,1)+'-01','00:00');

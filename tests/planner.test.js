@@ -23,7 +23,7 @@ test('deadline scopes clamp ordinary and web admins to self; department and comb
   assert.equal(calendarEntries({...b,me:{...b.me,role:'member'}},{scope:'club'},now).scope,'mine');
 });
 test('turning deadlines off preserves duration blocks and external activities without leaking hidden deadlines through the compact agenda',()=>{
-  const activities=[{id:'a',club:'torchwood',title:'活动',startsAt:now,endsAt:now+3600000},{id:'sps',club:'SPS',startsAt:now,endsAt:now+3600000}];
+  const activities=[{id:'a',club:'torchwood',title:'活动',startsAt:now,endsAt:now+3600000},{id:'sps:t_'+ 'a'.repeat(32)+':2026-10-30',club:'SPS',title:'同步活动',startsAt:now,endsAt:now+3600000}];
   const result=calendarEntries(board,{showDeadlines:false,activities},now);
   assert.deepEqual(result.entries.map(e=>e.kind),['activity','external']);
   const compact=compactTasks(board,'club',now);
