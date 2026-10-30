@@ -8,6 +8,8 @@ import { departmentLabel, invitationToken } from '../shared/departments';
 import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain } from '../shared/assignments';
 import { scheduleDraft, enableDuration, followStart, followDuration, applyTemplateDuration, changeScheduleField, scheduleFields } from '../shared/schedule-draft';
 import { templateDurationForm, templateDurationValue } from '../shared/template-duration';
+import {personalCalendar} from '../shared/ical';
+import {configureBooking,otherActivities} from './booking';
 const root = document.getElementById('app');
 let stop = null, generation = 0, inviteKey = '', adminLoad = 0;
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
@@ -91,6 +93,7 @@ async function loadAdmin() {
 }
 function receive(state) {
   s.sync = state;
+  if (['board','mine'].includes(s.page) && state.phase==='ready' && state.board?.club && !s.bookingLoading && Date.now()-(s.bookingCheckedAt || 0)>30000) loadBooking();
   if (s.page==='templates' && s.category && state.board && !(state.board.templates || []).some(t=>t.category===s.category)) s.category='';
   if (state.board && !state.board.club && ['board','mine','task','members','templates','admin','admin-edit','admin-archives'].includes(s.page)) { go('/entry'); return; }
   if (state.board?.club && !api.clubId()) api.setClub(state.board.club.id);
@@ -110,6 +113,17 @@ function receive(state) {
     }
   }
   render();
+}
+async function loadBooking() {
+  if(s.bookingLoading || !s.sync.board?.club || document.hidden)return;
+  const ticket=generation,clubId=s.sync.board.club.id;
+  s.bookingLoading=true;s.bookingCheckedAt=Date.now();
+  try {
+    const [data,status]=await Promise.all([otherActivities(),api.bookingStatus(clubId).catch(()=>null)]);
+    if(ticket!==generation)return;
+    s.booking={...data,sync:status};
+  } catch(error) {if(ticket===generation)s.booking={...s.booking,error:error.message};}
+  finally {if(ticket===generation){s.bookingLoading=false;render();}}
 }
 async function route() {
   const ticket = ++generation; if (stop) stop(); stop = null;
@@ -305,6 +319,15 @@ root.addEventListener('click', event => {
     render(); return;
   }
   if (action === 'reload') { location.reload(); return; }
+  if (action==='locationMode') {s.form.hasLocation=value==='true';render();return;}
+  if (action==='refreshBooking') {loadBooking();return;}
+  if (action==='exportCalendar') {
+    const result=personalCalendar(s.sync.board);
+    if(!result.count){toast('当前没有需要导出的个人日程');return;}
+    const blob=new Blob([result.text],{type:'text/calendar;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download='SPS-我的日程-'+parts(Date.now()).date+'.ics';document.body.append(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);toast('已导出 '+result.count+' 项个人日程，可导入系统日历');return;
+  }
   if (action === 'authMode') { s.authMode = value; s.error = ''; render(); return; }
   if (action === 'joinMode') { s.joinMode = value; s.error = ''; render(); return; }
   if (action === 'filter') { s.filter = value; api.sync.touch(); render(); return; }
@@ -404,7 +427,7 @@ async function start() {
   try {
     const response = await fetch(new URL('./config.json', location.href.split('#')[0]), { cache:'no-store' });
     if (!response.ok) throw new Error('配置加载失败，请刷新页面');
-    const config = await response.json(); api.configure(config.apiBase);
+    const config = await response.json(); api.configure(config.apiBase);configureBooking(config.bookingApiBase);
     api.sync.setVisible(!document.hidden); api.sync.setOnline(navigator.onLine); await route();
   } catch (error) { root.innerHTML = `<section class="page"><h1 class="h1">暂时无法连接</h1><p class="error">${views.e(error.message)}</p><button data-action="reload">重新加载</button></section>`; }
 }

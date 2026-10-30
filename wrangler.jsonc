@@ -12,7 +12,9 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ClubService"] }],
   "vars": {
     "ALLOWED_ORIGINS": "https://sps-club-schedule.github.io,https://farawayshore.github.io",
-    "REGISTRATION_OPEN": "true"
+    "REGISTRATION_OPEN": "true",
+    "BOOKING_CLUB_ID": "c_4b41fd4ed7f3812cb1c624261a986141",
+    "BOOKING_SYNC_URL": "https://sysu-phy-club-book.folderrewind.top/api/integrations/sps"
   },
   "observability": { "enabled": false }
 }

@@ -57,7 +57,9 @@ function createService({ store, now, randomId, hash }) {
     const dueAt=deadlineFollowsStart?startsAt:input.dueAt===undefined?previous?.dueAt:input.dueAt;
     // Preserve existing past deadlines when editing unrelated fields.
     if (!previous || dueAt!==previous.dueAt) deadline(dueAt);
-    return {dueAt,startsAt,endsAt,deadlineFollowsStart:!!deadlineFollowsStart};
+    const location=range?text(input.location===undefined?previous?.location || '':input.location,'活动地点',80,true):'';
+    if (child && input.location) fail('VALIDATION','子任务不设置活动地点');
+    return {dueAt,startsAt,endsAt,deadlineFollowsStart:!!deadlineFollowsStart,location};
   }
   function content(input) {
     if (!['normal', 'high'].includes(input.priority)) fail('VALIDATION', '请选择任务优先级');

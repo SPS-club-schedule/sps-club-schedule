@@ -4,6 +4,7 @@ import domain from '../shared/domain.js';
 import { createStore } from './store.mjs';
 import { createAdminService, bumpAccountRevision } from './admin.mjs';
 import { createAccountService } from './account.mjs';
+import { createBookingSync, authorized } from './booking-sync.mjs';
 const { createService, ClubError } = domain;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const random = () => randomBytes(32).toString('hex');
@@ -57,6 +58,7 @@ export class ClubService extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env); this.env = env; this.sql = ctx.storage.sql;
     this.store = createStore(ctx.storage);
+    this.booking = createBookingSync(ctx,env,this.store);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, salt TEXT NOT NULL,
       password_hash TEXT NOT NULL, recovery_hash TEXT NOT NULL, created_at INTEGER NOT NULL
@@ -151,6 +153,12 @@ export class ClubService extends DurableObject {
     const account = this.authenticate(request);
     if (path === '/auth/logout') { this.sql.exec('DELETE FROM sessions WHERE token_hash=?', account.tokenHash); return { ok: true }; }
     if (path !== '/api') fail('NOT_FOUND', '接口不存在');
+    if (data.action==='bookingStatus') {
+      const member=await this.store.get('members','m_'+hash(data.input?.clubId+':'+account.id).slice(0,32));
+      if (!member || member.archived) fail('FORBIDDEN','请先加入这个社团');
+      return {enabled:this.booking.configured() && data.input.clubId===this.env.BOOKING_CLUB_ID,
+        ...(data.input.clubId===this.env.BOOKING_CLUB_ID?{sync:this.booking.status()}:{})};
+    }
     const selfAccount = typeof data.action === 'string' && data.action.startsWith('account');
     if (selfAccount && data.action !== 'accountSettings') {
       this.limit('account-write:' + account.id, 60, 15 * 60000);
@@ -160,11 +168,24 @@ export class ClubService extends DurableObject {
     if (typeof data.action === 'string' && data.action.startsWith('admin') && !['adminMembers','adminArchives'].includes(data.action)) this.limit('admin-write:' + account.id, 60, 15 * 60000);
     // Count attempts outside the edit transaction so failed verification cannot roll the limit back.
     if (typeof data.action === 'string' && data.action.startsWith('admin') && data.input?.adminPassword !== undefined) this.limit('admin-password:' + account.id, 10, 15 * 60000);
-    const result = await (selfAccount ? this.account(data.action, data.input || {}, account) : typeof data.action === 'string' && data.action.startsWith('admin') ? this.admin.execute(data.action, data.input || {}, account.id) : this.run(data.action, data.input, account.id));
+    const result = await this.store.transaction(async()=>{
+      const result=await (selfAccount ? this.account(data.action, data.input || {}, account) : typeof data.action === 'string' && data.action.startsWith('admin') ? this.admin.execute(data.action, data.input || {}, account.id) : this.run(data.action, data.input, account.id));
+      await this.booking.enqueue(result);
+      return result;
+    });
     const currentUser = this.sql.exec('SELECT id,username FROM accounts WHERE id=?', account.id).toArray()[0];
-    return { ...result, currentUser };
+    return { ...result, currentUser, ...(result.club?{bookingEnabled:this.booking.configured() && result.club.id===this.env.BOOKING_CLUB_ID}:{}) };
   }
   async fetch(request) {
+    if (new URL(request.url).pathname==='/integrations/booking') {
+      if (!authorized(request,this.env.BOOKING_SYNC_KEY)) return json({error:'Not found'},404);
+      return this.ctx.blockConcurrencyWhile(async()=>{
+        if (request.method==='GET') return json({configured:this.booking.configured(),clubId:this.env.BOOKING_CLUB_ID || null,sync:this.booking.status(),
+          ...(!this.env.BOOKING_CLUB_ID?{clubs:(await this.store.find('clubs',{})).map(c=>({id:c._id,name:c.name}))}:{})});
+        if (request.method==='POST' && this.booking.configured()) { await this.booking.reconcile(); return json({queued:true}); }
+        return json({error:'Not configured or unsupported method'},400);
+      });
+    }
     let data;
     try { data = await readBody(request); }
     catch (e) { return json({ ok: false, code: e.code || 'VALIDATION', message: e.message }, 400); }
@@ -179,6 +200,7 @@ export class ClubService extends DurableObject {
       }
     });
   }
+  async alarm() { await this.ctx.blockConcurrencyWhile(()=>this.booking.deliver()); }
 }
 
 export default {
@@ -191,6 +213,10 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
     const path = new URL(request.url).pathname;
     if (path === '/health' && request.method === 'GET') return Response.json({ ok: true, service: 'sps-club-api' }, { headers });
+    if (path==='/integrations/booking' && ['GET','POST'].includes(request.method)) {
+      if (!authorized(request,env.BOOKING_SYNC_KEY)) return json({error:'Not found'},404);
+      return env.CLUB_SERVICE.get(env.CLUB_SERVICE.idFromName('sps-club-service-v1')).fetch(request);
+    }
     if (request.method !== 'POST' || !['/api', '/auth/register', '/auth/login', '/auth/logout', '/auth/recover'].includes(path)) return Response.json({ ok: false, message: '接口不存在' }, { status: 404, headers });
     const forwarded = new Request(request);
     forwarded.headers.set('X-SPS-IP', hash(clientIp(request, env)));

@@ -5,7 +5,7 @@ function scheduleDraft(task) {
   if (!hasDuration(task || {})) return { hasDuration: false, deadlineFollowsStart: false };
   const start=parts(task.startsAt), end=parts(task.endsAt);
   return { hasDuration:true, startDate:start.date, startTime:start.time, endDate:end.date, endTime:end.time,
-    deadlineFollowsStart:task.deadlineFollowsStart ?? task.dueAt===task.startsAt };
+    deadlineFollowsStart:task.deadlineFollowsStart ?? task.dueAt===task.startsAt,location:task.location || '',hasLocation:!!task.location };
 }
 function followStart(form) {
   form.deadlineFollowsStart=true;
@@ -48,6 +48,7 @@ function scheduleFields(form) {
   return { dueAt:parseDeadline(form.date,form.time),
     startsAt:form.hasDuration?parseDeadline(form.startDate,form.startTime):null,
     endsAt:form.hasDuration?parseDeadline(form.endDate,form.endTime):null,
-    deadlineFollowsStart:!!form.hasDuration && !!form.deadlineFollowsStart };
+    deadlineFollowsStart:!!form.hasDuration && !!form.deadlineFollowsStart,
+    location:form.hasDuration && form.hasLocation?form.location || '':'' };
 }
 module.exports={scheduleDraft,enableDuration,followStart,followDuration,applyTemplateDuration,changeScheduleField,scheduleFields};

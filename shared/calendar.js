@@ -7,10 +7,12 @@ function shiftMonth(month, amount) {
   return anchor.toISOString().slice(0, 7);
 }
 
-function deadlineCalendar(tasks, { mine = false, month, date = '', now = Date.now() } = {}) {
+function deadlineCalendar(tasks, { mine = false, month, date = '', now = Date.now(), activities=[] } = {}) {
   const today = parts(now).date;
   month = month || today.slice(0, 7);
-  const pending = tasks.filter(t => !t.archived && (mine ? t.assigned && !t.myDone : !t.done))
+  const own = tasks.filter(t => !t.archived && (mine ? t.assigned && !t.myDone : !t.done));
+  const external=activities.filter(t=>t.club!=='SPS' && Number.isSafeInteger(t.startsAt) && Number.isSafeInteger(t.endsAt) && t.endsAt>t.startsAt).map(t=>({...t,external:true}));
+  const pending = [...own,...external]
     .slice().sort((a, b) => a.dueAt - b.dueAt || a.title.localeCompare(b.title, 'zh-CN'));
   const monthStart=parseDeadline(month+'-01','00:00'), monthEnd=parseDeadline(shiftMonth(month,1)+'-01','00:00');
   const overlaps=(task,start,end)=>hasDuration(task) && task.startsAt<end && task.endsAt>start;
@@ -33,12 +35,12 @@ function deadlineCalendar(tasks, { mine = false, month, date = '', now = Date.no
     const durations=monthTasks.filter(t=>overlaps(t,start,end));
     const entries=[...new Set([...due,...durations])].sort(order(start));
     grouped.set(key,entries);
-    return { date: key, day, count: entries.length, deadlineCount:due.length, durationCount:durations.length, overdue: due.some(t => t.dueAt < now), today: key === today };
+    return { date: key, day, count: entries.length, deadlineCount:due.length, durationCount:durations.filter(t=>!t.external).length, externalCount:durations.filter(t=>t.external).length, overdue: due.some(t => t.dueAt < now), today: key === today };
   });
   const selected = date.startsWith(month + '-') && days.some(d => d?.date === date) ? date : '';
   const overdue = pending.filter(t => t.dueAt < now);
   return {
-    month, today, days, selected, total: pending.length, monthCount: monthTasks.length,
+    month, today, days, selected, total: own.length, activityTotal:external.length, monthCount: monthTasks.length,
     overdueCount: overdue.length, firstOverdue: overdue.length ? parts(overdue[0].dueAt).date : '',
     tasks: selected ? grouped.get(selected) || [] : monthTasks.sort((a,b)=>{
       const time=t=>overlaps(t,monthStart,monthEnd)?Math.max(t.startsAt,monthStart):t.dueAt;

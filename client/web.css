@@ -2,3 +2,5 @@
 @media(max-width:900px){.layout{gap:35px}.intro{max-width:290px}.intro h1{font-size:36px}.features{grid-template-columns:1fr;gap:14px}}
 @media(max-width:760px){.layout{display:block}.intro{display:none}.app-shell{width:min(100%,430px);margin:0 auto}.nav,.footer{left:0;right:0;width:100%}.page{padding-left:20px;padding-right:20px}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+
+.calendar-day.has-external{position:relative}.calendar-external-mark{position:absolute;bottom:6px;left:35%;right:35%;height:3px;border-radius:3px;background:#ad7953}.calendar-external-key{display:inline-block;width:14px;height:3px;background:#ad7953;vertical-align:middle}.external-club{display:block;color:#8a5938;font-weight:700;margin-bottom:4px}.external-activity{background:#fcfaf5}.external-activity .duration-tag{color:#8a5938}
