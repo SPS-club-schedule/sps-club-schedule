@@ -20,7 +20,7 @@ function render() {
   const agendaScroll = root.querySelector('.calendar-agenda-list')?.scrollTop;
   const agendaFocus = active?.matches('.calendar-agenda-list');
   const scroll = window.scrollY;
-  const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, reset:views.resetPassword }[s.page] || views.auth)(s);
+  const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, reset:views.resetPassword, account:views.accountSettings }[s.page] || views.auth)(s);
   root.innerHTML = html;
   if (name) {
     const next = root.querySelector(`[name="${CSS.escape(name)}"]`);
@@ -58,6 +58,12 @@ async function copy(text) {
 function inviteLink(token) { const url = new URL(location.href); url.hash = '/auth?invite=' + token; return url.href; }
 const adminPage = () => ['admin','admin-edit'].includes(s.page);
 function clearAdmin() { s.adminData=null; s.adminTarget=null; s.form={}; s.resetLink=''; }
+async function loadAccount() {
+  const ticket=generation;
+  const result=await api.accountSettings();
+  if (ticket!==generation) return;
+  s.account=result.account; s.form={accountUsername:result.account.username};
+}
 async function loadAdmin() {
   const ticket=generation, club=s.sync.board?.club;
   if (!adminPage() || !club || !isAdmin(s.sync.board.me.role)) return;
@@ -119,6 +125,7 @@ async function route() {
   if (['board','mine','task','members','templates','admin','admin-edit'].includes(page)) { stop = api.sync.watch(receive); return; }
   if (page === 'auth' || page==='reset') return;
   try {
+    if (page==='account') { await loadAccount(); if(ticket===generation) render(); return; }
     const b = await api.bootstrap({ includeClubs: page === 'entry' });
     if (ticket !== generation) return;
     if (page === 'entry') { s.clubs = b.clubs || []; s.form.nickname = b.me?.name || ''; }
@@ -215,6 +222,18 @@ root.addEventListener('submit', event => {
       const result=await api.authenticate('recover',{username:data.username,password:data.password,resetToken:s.resetToken});
       s.form={}; s.resetToken=''; s.recovery=result.recoveryCode;
     }
+    if (kind==='accountUsername' || kind==='accountPassword') {
+      if (!s.account) throw new Error('请先重新加载账号资料');
+      if (kind==='accountPassword' && data.newPassword!==data.confirmPassword) throw new Error('两次输入的新密码不一致');
+      const ticket=generation;
+      const result=kind==='accountUsername'
+        ? await api.changeUsername({revision:s.account.revision,username:data.accountUsername,currentPassword:data.usernamePassword})
+        : await api.changePassword({revision:s.account.revision,currentPassword:data.currentPassword,newPassword:data.newPassword});
+      if (ticket!==generation) return;
+      s.account=result.account; s.form={accountUsername:result.account.username};
+      if (result.recoveryCode) { s.recovery=result.recoveryCode; render(); window.scrollTo(0,0); }
+      else toast('用户名已保存，请使用新用户名登录');
+    }
     if (kind==='adminMember') {
       const target=s.adminTarget;
       if (!target?.canEdit) throw new Error('没有管理这位成员的权限');
@@ -299,6 +318,7 @@ root.addEventListener('click', event => {
   if (action === 'chooseClub') { api.setClub(id); go('/board'); return; }
   if (action === 'continue') { s.recovery = ''; go('/board'); return; }
   if (action === 'copyRecovery') { copy(s.recovery); return; }
+  if (action === 'accountRecoverySaved') { s.recovery=''; render(); window.scrollTo(0,0); return; }
   if (action === 'copyReset') { copy(s.resetLink); return; }
   if (['copyInvite','share','rotateInvite'].includes(action) && !isAdmin(s.sync.board?.me?.role)) return;
   if (action === 'copyInvite') { const token=invitationToken(s.invites,s.inviteDepartment); if(token) copy(token); return; }
@@ -310,6 +330,7 @@ root.addEventListener('click', event => {
     return;
   }
   perform(async () => {
+    if (action === 'reloadAccount') { await loadAccount(); toast('账号资料已更新'); }
     if (action === 'refresh') { await api.bootstrap({ force: true }); if(adminPage()&&!s.adminLoading) await loadAdmin(); }
     if (action==='adminDelete') {
       const target=s.adminTarget, clubId=s.sync.board.club.id, adminPassword=s.form.adminPassword;

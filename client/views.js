@@ -11,6 +11,7 @@ import { scheduleEditor } from './schedule-editor';
 export { e } from './ui';
 export { templates, templateEditor } from './template-views';
 export { admin, adminEditor, resetPassword } from './admin-views';
+export { accountSettings } from './account-views';
 const brand = `<div class="brand-mark">SPS</div><div class="eyebrow">BETTER TOGETHER</div><h1 class="h1 space">社团的每一件事，<br>一起完成。</h1><p class="muted space">安排任务，约定时间，让每一份参与都有回应。</p>`;
 const parentLink = t => t.parentTaskId ? link('/task?id='+encodeURIComponent(t.parentTaskId),'↳ '+e(t.parentTitle),'parent-task-link small') : '';
 function subtasks(t, b, s) {
@@ -36,7 +37,7 @@ export function entry(s) {
   const f = s.form;
   return `<section class="page entry">${brand}<div class="section"><h2 class="label">我的社团</h2>${(s.clubs||[]).map(c=>button('chooseClub',e(c.name)+' →','secondary full space',`data-id="${e(c.id)}"`)).join('')}${!s.clubs?.length?'<p class="muted small">加入一个社团，开始协作。</p>':''}</div>
   <div class="chips section">${button('joinMode','加入社团','chip '+(s.joinMode==='join'?'active':''),'data-value="join"')}${button('joinMode','创建社团','chip '+(s.joinMode==='create'?'active':''),'data-value="create"')}</div>
-  <form data-form="club" class="section">${field('nickname','你在社团里的称呼',f.nickname,'text','required maxlength="20"')}${s.joinMode==='join'?field('invite','邀请码',f.invite,'text','required maxlength="64"'):field('name','社团名称',f.name||'SPS 社团日程','text','required maxlength="30"')}${error(s)}<button class="primary full" ${busy(s)}>${s.joinMode==='join'?'加入这个社团':'创建社团'} →</button></form>${button('logout','退出登录','plain full section',busy(s))}</section>`;
+  <form data-form="club" class="section">${field('nickname','你在社团里的称呼',f.nickname,'text','required maxlength="20"')}${s.joinMode==='join'?field('invite','邀请码',f.invite,'text','required maxlength="64"'):field('name','社团名称',f.name||'SPS 社团日程','text','required maxlength="30"')}${error(s)}<button class="primary full" ${busy(s)}>${s.joinMode==='join'?'加入这个社团':'创建社团'} →</button></form>${link('/account','账号设置 · 用户名与密码','secondary full section center')}${button('logout','退出登录','plain full section',busy(s))}</section>`;
 }
 export function board(s, mine) {
   const b = s.sync.board;
@@ -81,7 +82,7 @@ export function members(s) {
   const b=s.sync.board;
   if (!b?.club) return `<section class="page">${syncRow(s)}${error(s)}</section>${nav('members',b)}`;
   const department=s.inviteDepartment || '', token=invitationToken(s.invites,department);
-  return `<section class="page"><div class="eyebrow space">OUR PEOPLE</div><h1 class="h1 space">一起做事的人</h1><p class="muted space">${e(b.club.name)} · ${b.members.length} 位成员</p>${syncRow(s)}${error(s)}
+  return `<section class="page"><div class="eyebrow space">OUR PEOPLE</div><div class="row between space"><h1 class="h1">一起做事的人</h1>${link('/account','账号设置','secondary compact')}</div><p class="muted space">${e(b.club.name)} · ${b.members.length} 位成员</p>${syncRow(s)}${error(s)}
   ${isAdmin(b.me.role)?`<div class="card section"><div class="row between"><h2 class="h2">邀请新伙伴</h2><span class="invite-star">✦</span></div><div class="field space"><label class="label" for="inviteDepartment">邀请加入部门</label><select id="inviteDepartment" name="inviteDepartment" ${busy(s)}><option value="">社团通用 · 暂不分配部门</option>${DEPARTMENTS.map(d=>`<option value="${d.id}" ${department===d.id?'selected':''}>${d.name}</option>`).join('')}</select></div><p class="muted small space">${department?'用此邀请码或链接加入，将自动归入'+departmentLabel(department)+'。':'选择部门后分享对应邀请码，新成员会自动归入该部门。通用邀请码仅加入社团。'}</p><div class="invite-code space">${e(token||'正在获取邀请码…')}</div><div class="row space">${button('copyInvite','复制邀请码','secondary grow compact',token?'':'disabled')}${button('share','分享邀请','primary grow compact',token?'':'disabled')}</div>${b.me.role==='owner'?button('rotateInvite','更换此邀请码','plain small space',s.busy||!token?'disabled':''):''}</div>`:'<p class="hint section">邀请新成员请联系本社团管理员。</p>'}
   <div class="section row between"><h2 class="h2">社团成员</h2><span class="small muted">所有成员都能发布任务</span></div><div class="card space">${b.members.map(m=>`<div class="row between member-row"><div class="row grow"><div class="avatar ${isAdmin(m.role)?'owner':''}">${e(m.name[0])}</div><div class="grow"><div class="wrap">${e(m.name)}${m.id===b.me.id?' <span class="small muted">（我）</span>':''}</div><div class="small muted">${e(departmentLabel(m.department))}</div></div></div><span class="pill">${roleLabel(m.role)}</span></div>`).join('')}</div>
   <form data-form="name" class="section"><label class="label" for="nickname">我的社团称呼</label><div class="row"><input class="grow" id="nickname" name="nickname" value="${e(s.form.nickname??b.me.name)}" required maxlength="20"><button class="secondary compact" ${busy(s)}>保存</button></div></form>${link('/entry','切换、加入或创建社团 →','plain full section center')}<p class="small muted center">当前账号：${e(user()?.username)}</p>${button('logout','退出登录','plain full',busy(s))}</section>${nav('members',b)}`;

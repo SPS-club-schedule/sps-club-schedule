@@ -3,6 +3,7 @@ import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from
 import domain from '../shared/domain.js';
 import { createStore } from './store.mjs';
 import { createAdminService, bumpAccountRevision } from './admin.mjs';
+import { createAccountService } from './account.mjs';
 const { createService, ClubError } = domain;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const random = () => randomBytes(32).toString('hex');
@@ -65,11 +66,13 @@ export class ClubService extends DurableObject {
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
     CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);`);
     this.run = createService({ store: this.store, now: Date.now, hash, randomId: () => randomBytes(16).toString('hex') });
-    this.admin = createAdminService({ store:this.store, sql:this.sql, hash, random, username, verifyPassword:(id,pass) => {
-      const row = this.sql.exec('SELECT salt,password_hash FROM accounts WHERE id=?', id).toArray()[0];
-      if (typeof pass !== 'string' || pass.length < 10 || pass.length > 128 || !row || !equal(passwordHash(pass,row.salt),row.password_hash)) fail('FORBIDDEN', '请输入你自己的正确密码以确认操作');
-      this.sql.exec('DELETE FROM rate_limits WHERE key=?', 'admin-password:' + id);
-    } });
+    this.admin = createAdminService({ store:this.store, sql:this.sql, hash, random, username, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'admin-password') });
+    this.account = createAccountService({ store:this.store, sql:this.sql, hash, random, username, password, passwordHash, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'account-password') });
+  }
+  verifyPassword(id, pass, limitPrefix) {
+    const row = this.sql.exec('SELECT salt,password_hash FROM accounts WHERE id=?', id).toArray()[0];
+    if (typeof pass !== 'string' || pass.length < 10 || pass.length > 128 || !row || !equal(passwordHash(pass,row.salt),row.password_hash)) fail('FORBIDDEN', '请输入你自己的正确密码以确认操作');
+    this.sql.exec('DELETE FROM rate_limits WHERE key=?', limitPrefix + ':' + id);
   }
   limit(key, maximum, window) {
     const now = Date.now();
@@ -148,11 +151,16 @@ export class ClubService extends DurableObject {
     const account = this.authenticate(request);
     if (path === '/auth/logout') { this.sql.exec('DELETE FROM sessions WHERE token_hash=?', account.tokenHash); return { ok: true }; }
     if (path !== '/api') fail('NOT_FOUND', '接口不存在');
+    const selfAccount = typeof data.action === 'string' && data.action.startsWith('account');
+    if (selfAccount && data.action !== 'accountSettings') {
+      this.limit('account-write:' + account.id, 60, 15 * 60000);
+      this.limit('account-password:' + account.id, 10, 15 * 60000);
+    }
     // Caller identity comes only from the opaque server-side session.
     if (typeof data.action === 'string' && data.action.startsWith('admin') && data.action !== 'adminMembers') this.limit('admin-write:' + account.id, 60, 15 * 60000);
     // Count attempts outside the edit transaction so failed verification cannot roll the limit back.
     if (typeof data.action === 'string' && data.action.startsWith('admin') && data.input?.adminPassword !== undefined) this.limit('admin-password:' + account.id, 10, 15 * 60000);
-    const result = await (typeof data.action === 'string' && data.action.startsWith('admin') ? this.admin.execute(data.action, data.input || {}, account.id) : this.run(data.action, data.input, account.id));
+    const result = await (selfAccount ? this.account(data.action, data.input || {}, account) : typeof data.action === 'string' && data.action.startsWith('admin') ? this.admin.execute(data.action, data.input || {}, account.id) : this.run(data.action, data.input, account.id));
     const currentUser = this.sql.exec('SELECT id,username FROM accounts WHERE id=?', account.id).toArray()[0];
     return { ...result, currentUser };
   }
