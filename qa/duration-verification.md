@@ -1,0 +1,9 @@
+# Optional task duration — 2026-10-30
+
+- 78 unit/domain/UI tests, 23 Worker/SQLite integration tests and 3 gateway tests pass (104 total). Local build and whitespace checks pass.
+- Tasks default to deadline-only. A main task can opt into a start/end interval; deadline follows start until explicitly overridden. The manual/following choice persists across edits and SQLite restart, with an explicit restore-follow action. Disabling duration preserves the deadline.
+- Server validation rejects incomplete, reversed, zero-length and over-five-year ranges, invalid follow flags, and duration on standalone or grouped subtasks. Failed grouped writes roll back. Existing permissions, stale-edit protection, completion records and legacy clients are covered.
+- Calendar tests cover cross-month spans, end-exclusive midnight, distinct deadlines outside the interval, unique counts, interval removal, personal completion filtering and child tasks. Each intersecting day has a duration marker; agenda rows show full start/end and the independent deadline.
+- Local browser QA: confirmed default deadline-only mode; enabled a two-day interval; observed start-to-deadline following; manually changed deadline and moved start without overwriting it; restored following and published; reopened the task and saved a manual deadline; reopened again and shifted start while preserving the manual deadline. The child editor has no duration controls.
+- Checked the 375 × 812 mobile calendar: 7–8 November show duration markers and 6 November retains the independent deadline; selecting the second duration day shows the exact range and deadline. Screenshot: `qa/duration-calendar-mobile.png` (ignored local artifact).
+- All test writes were made in the isolated local club. No production tasks are created or modified as part of verification. Optional JSON fields need no database migration.

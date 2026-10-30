@@ -14,6 +14,14 @@ function dueLabel(timestamp, now) {
   const tomorrow = parts(now + 86400000).date;
   return `${p.date === today ? '今天' : p.date === tomorrow ? '明天' : p.date.slice(5).replace('-', '月') + '日'} ${p.time}`;
 }
+function hasDuration(task) {
+  return !task.parentTaskId && Number.isSafeInteger(task.startsAt) && Number.isSafeInteger(task.endsAt) && task.endsAt>task.startsAt;
+}
+function durationLabel(task) {
+  if (!hasDuration(task)) return '';
+  const start=parts(task.startsAt), end=parts(task.endsAt);
+  return `${start.date} ${start.time} — ${start.date===end.date?'':end.date+' '}${end.time}`;
+}
 function taskView(task, board, now = Date.now()) {
   const { me, members } = board;
   const participants = task.participantIds.map(id => {
@@ -30,6 +38,7 @@ function taskView(task, board, now = Date.now()) {
   const canToggle = task.mode === 'individual' ? assigned : done ? canManage || task.sharedCompletion.memberId === me.id : assigned;
   const creator = members.find(m => m.id === task.creatorId);
   return Object.assign({}, task, {
+    hasDuration:hasDuration(task), durationLabel:durationLabel(task),
     parentTitle: task.parentTaskId ? (board.tasks || []).find(t => t._id === task.parentTaskId)?.title || '主任务' : '',
     participants, count, total, done, assigned, myDone, canToggle, canManage,
     creatorName: creator ? creator.name : '社团成员',
@@ -43,4 +52,4 @@ function taskView(task, board, now = Date.now()) {
     actionLabel: myDone ? task.mode === 'shared' ? '重新打开任务' : '撤销我的完成' : task.mode === 'shared' ? '完成这项任务' : '标记我已完成'
   });
 }
-module.exports = { parts, parseDeadline, taskView };
+module.exports = { parts, parseDeadline, taskView, hasDuration, durationLabel };

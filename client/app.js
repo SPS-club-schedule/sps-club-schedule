@@ -1,11 +1,12 @@
 import * as api from './api';
 import * as views from './views';
-import { parseDeadline, parts, taskView } from '../shared/view';
+import { parts, taskView } from '../shared/view';
 import { shiftMonth } from '../shared/calendar';
 import { templateDraft, draftDeadline, MAX_STEPS } from '../shared/templates';
 import { isAdmin } from '../shared/permissions';
 import { departmentLabel, invitationToken } from '../shared/departments';
 import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain } from '../shared/assignments';
+import { scheduleDraft, enableDuration, followStart, changeScheduleField, scheduleFields } from '../shared/schedule-draft';
 const root = document.getElementById('app');
 let stop = null, generation = 0, inviteKey = '';
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
@@ -132,6 +133,7 @@ async function route() {
       const p = parts(task?.dueAt || (parent?.dueAt > Date.now() ? parent.dueAt : Date.now()+86400000));
       s.editBoard = b; s.revision = task?.revision;
       s.form = { title: task?.title || '', description: task?.description || '', date: p.date, time: task || parent ? p.time : '20:00', mode: task?.mode || 'individual', priority: task?.priority || 'normal', participantIds: task?.participantIds.slice() || (parent ? [] : b.members.map(m=>m.id)) };
+      Object.assign(s.form,scheduleDraft(task));
       if (!task && !parent && s.selectedTemplate) applyTemplate();
     }
     if (page === 'template-edit') {
@@ -190,7 +192,7 @@ function inputChanged(event) {
   else if (name==='inviteDepartment') { s.inviteDepartment=value; render(); }
   else if (name==='templateCategory') { s.category=value; render(); }
   else if (name === 'search') { s.search = value; api.sync.touch(); render(); }
-  else { s.form[name]=value; if(event.type==='change'&&['date','time'].includes(name)&&s.steps.length) render(); }
+  else { changeScheduleField(s.form,name,value); if(event.type==='change'&&['date','time','startDate','startTime','endDate','endTime'].includes(name)) render(); }
 }
 root.addEventListener('input', inputChanged);
 root.addEventListener('change', inputChanged);
@@ -220,6 +222,7 @@ root.addEventListener('submit', event => {
       api.setClub(result.clubId); go('/board'); if (result.department) toast('已加入'+departmentLabel(result.department));
     }
     if (kind === 'task') {
+      if (data.hasDuration && data.deadlineFollowsStart) followStart(data);
       const group=!s.id&&!s.parent&&s.steps.length>0;
       const subtasks=group?s.steps.map((step,index)=>{
         if (!resolveParticipants(step,s.editBoard.members,data).length) { s.openSteps.add(index); throw new Error(`请为子任务${index+1}「${step.title}」选择负责人`); }
@@ -227,7 +230,7 @@ root.addEventListener('submit', event => {
         if(dueAt<=Date.now()) { s.openSteps.add(index); throw new Error(`子任务${index+1}「${step.title}」的截止时间已过，请调整日期或提前天数`); }
         return {...taskFields(step),followMain:step.followMain === true,daysBefore:step.daysBefore,...(step.customDeadline?{dueAt}:{})};
       }):undefined;
-      const result = await api.call(s.id?'editTask':group?'createTaskGroup':'createTask', { ...taskFields(data), dueAt: parseDeadline(data.date,data.time), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId, ...(group?{subtasks,templateId:s.appliedTemplate?.id}:{}) });
+      const result = await api.call(s.id?'editTask':group?'createTaskGroup':'createTask', { ...taskFields(data), ...scheduleFields(data), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId, ...(group?{subtasks,templateId:s.appliedTemplate?.id}:{}) });
       go('/task?id='+encodeURIComponent(result.taskId));
     }
     if (kind === 'template') {
@@ -241,6 +244,8 @@ root.addEventListener('click', event => {
   const el = event.target.closest('[data-action]'); if (!el || el.disabled) return;
   const { action, value, id } = el.dataset;
   if (s.busy) return;
+  if (action==='duration') { enableDuration(s.form,value==='true'); render(); return; }
+  if (action==='followStart') { followStart(s.form); render(); return; }
   if (action==='applyTemplate') {
     perform(async()=>{
       if ((s.form.title || s.steps.length) && !await confirmAction('套用这个模板？','将替换当前草稿的名称、说明、分工和子任务，保留主任务截止日期。')) return;

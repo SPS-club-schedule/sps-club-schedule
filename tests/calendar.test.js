@@ -87,6 +87,42 @@ test('empty months and stale date selections return a usable month view', () => 
   assert.equal(calendar(tasks, { month: '2026-11', date: '2026-11-31' }).selected, '');
 });
 
+test('duration covers every intersecting date across months, excluding an end at midnight, with no duplicate deadline counts',()=>{
+  const t=task('overnight','2026-10-31','23:00',{startsAt:parseDeadline('2026-10-31','23:00'),endsAt:parseDeadline('2026-11-03','00:00')});
+  const oct=calendar([t]);
+  const day=oct.days.find(d=>d?.date==='2026-10-31');
+  assert.equal(day.count,1); assert.equal(day.deadlineCount,1); assert.equal(day.durationCount,1);
+  const nov=calendar([t],{month:'2026-11'});
+  assert.equal(nov.monthCount,1); assert.equal(nov.tasks.length,1);
+  assert.equal(nov.days.find(d=>d?.day===1).durationCount,1);
+  assert.equal(nov.days.find(d=>d?.day===2).durationCount,1);
+  assert.equal(nov.days.find(d=>d?.day===3).count,0);
+  assert.equal(calendar([t],{month:'2026-11',date:'2026-11-02'}).tasks[0]._id,t._id);
+});
+
+test('manual deadlines outside duration remain visible; completion, removal and subtasks obey existing calendar rules',()=>{
+  const t=task('range','2026-10-29','20:00',{startsAt:parseDeadline('2026-11-02','10:00'),endsAt:parseDeadline('2026-11-02','12:00')});
+  assert.equal(calendar([t],{date:'2026-10-29'}).tasks.length,1);
+  assert.equal(calendar([t],{month:'2026-11',date:'2026-11-02'}).tasks.length,1);
+  assert.equal(calendar([{...t,parentTaskId:'parent'}],{month:'2026-11'}).monthCount,0);
+  assert.equal(calendar([{...t,startsAt:null,endsAt:null}],{month:'2026-11'}).monthCount,0);
+  t.completions.me=now;
+  assert.equal(calendar([t],{mine:true,month:'2026-11'}).monthCount,0);
+  assert.equal(calendar([t],{month:'2026-11'}).monthCount,1);
+  t.completions.other=now;
+  assert.equal(calendar([t],{month:'2026-11'}).monthCount,0);
+});
+
+test('duration calendar renders start/end times, an independent deadline and accessible day markers',async()=>{
+  const bundle=buildSync({entryPoints:['client/calendar.js'],bundle:true,format:'esm',write:false});
+  const {calendar:render}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+  const t=task('duration','2026-10-30','18:00',{startsAt:parseDeadline('2026-11-01','09:00'),endsAt:parseDeadline('2026-11-02','12:00')});
+  const html=render([taskView(t,board,now)],{month:'2026-11',date:'2026-11-02'},false,now);
+  assert.ok(html.includes('2026-11-01 09:00 — 2026-11-02 12:00'));
+  assert.ok(html.includes('截止：10月30日 18:00'));
+  assert.ok(html.includes('2026-11-02，0项未完成任务截止，1项持续任务'));
+});
+
 test('rendered calendar escapes task titles, links to details and labels dates for assistive technology', async () => {
   const bundle = buildSync({ entryPoints: ['client/calendar.js'], bundle: true, format: 'esm', write: false });
   const { calendar: render } = await import('data:text/javascript;base64,' + Buffer.from(bundle.outputFiles[0].text).toString('base64'));

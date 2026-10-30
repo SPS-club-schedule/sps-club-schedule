@@ -29,6 +29,10 @@ input, textarea { background: #fff; border: 0.5px solid #dce4da; border-radius: 
 input { height: 47px; }
 textarea { height: 105px; line-height: 1.6; }
 .field { margin-bottom: 16px; }
+.duration-fields { padding: 14px; margin-bottom: 16px; }
+.duration-fields .row:last-child .field { margin-bottom: 0; }
+.deadline-mode { margin-top: -8px; margin-bottom: 16px; }
+.task-duration { color: #476d78; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .hint { font-size: 11.5px; color: #819085; margin-top: 6px; }
 .banner { padding: 6.5px 10px; background: #edf0e4; color: #6d795c; font-size: 11px; border-radius: 7px; margin-bottom: 13px; }
 .error { padding: 12px; background: #fff0e9; border-radius: 8px; color: #a55037; margin-bottom: 12px; }
@@ -102,6 +106,12 @@ textarea { height: 105px; line-height: 1.6; }
 .calendar-day.is-today { border-color: #679278; }
 .calendar-day.is-selected { background: #245b45; color: white; border-color: #245b45; }
 .calendar-day:hover { box-shadow: inset 0 0 0 1px #91aa7b; }
+.calendar-day.has-duration { position: relative; }
+.calendar-duration-mark { position: absolute; left: 5px; right: 5px; bottom: 2px; height: 3px; border-radius: 2px; background: #548397; }
+.calendar-day.is-selected .calendar-duration-mark { background: #b7deec; }
+.calendar-duration-key { display: inline-block; width: 12px; height: 3px; background: #548397; margin: 0 4px 2px 7px; }
+.calendar-duration-label { display: block; color: #476d78; font-size: 10px; line-height: 1.6; margin-top: 3px; font-weight: 400; }
+.duration-tag { color: #476d78; }
 .calendar-legend { font-size: 10px; color: #7b8982; margin: 8px 0; min-height: 28px; }
 .calendar-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #749168; margin-right: 5px; }
 .calendar-overdue { font-size: 10px; color: #a55037; background: transparent; padding: 6px 0 6px 8px; font-weight: 500; }

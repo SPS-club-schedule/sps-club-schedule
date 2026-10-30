@@ -1,0 +1,6 @@
+import { button, field } from './ui';
+
+export function scheduleEditor(form, child) {
+  return `${child?'':`<div class="field"><div class="label">任务时间</div><div class="chips">${[[false,'仅截止时间'],[true,'有持续时段']].map(([enabled,label])=>button('duration',label,'chip '+(!!form.hasDuration===enabled?'active':''),`data-value="${enabled}" aria-pressed="${!!form.hasDuration===enabled}"`)).join('')}</div><p class="hint">默认只设置截止时间。有持续时段时，日历会显示开始至结束的安排。</p></div>${form.hasDuration?`<div class="card duration-fields"><div class="label">持续时段 · 北京时间</div><div class="row">${field('startDate','开始日期',form.startDate,'date','required')}${field('startTime','开始时间',form.startTime,'time','required')}</div><div class="row">${field('endDate','结束日期',form.endDate,'date','required')}${field('endTime','结束时间',form.endTime,'time','required')}</div></div>`:''}`}
+  <div class="row">${field('date','截止日期 · 北京时间',form.date,'date','required')}${field('time','时间',form.time,'time','required')}</div>${!child&&form.hasDuration?`<p class="hint deadline-mode">${form.deadlineFollowsStart?'截止时间正在跟随开始时间；可直接修改为其他时间。':'截止时间已手动设置，调整持续时段不会覆盖它。'}${!form.deadlineFollowsStart?button('followStart','恢复跟随开始时间','plain small'):''}</p>`:''}`;
+}

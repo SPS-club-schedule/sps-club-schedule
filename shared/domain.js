@@ -41,6 +41,21 @@ function createService({ store, now, randomId, hash }) {
     if (value > now() + 5 * 366 * 86400000) fail('VALIDATION', '截止时间不能超过五年');
     return value;
   }
+  function schedule(input, previous = null, child = false) {
+    const startsAt=input.startsAt===undefined?previous?.startsAt ?? null:input.startsAt;
+    const endsAt=input.endsAt===undefined?previous?.endsAt ?? null:input.endsAt;
+    const range=startsAt!==null || endsAt!==null;
+    if (input.deadlineFollowsStart!==undefined && typeof input.deadlineFollowsStart!=='boolean') fail('VALIDATION','截止时间跟随设置无效');
+    if (child && (range || input.deadlineFollowsStart)) fail('VALIDATION','子任务只设置截止时间，不设置持续时段');
+    if (range && (!Number.isSafeInteger(startsAt) || !Number.isSafeInteger(endsAt) || startsAt<0 || endsAt<=startsAt || endsAt>now()+5*366*86400000)) fail('VALIDATION','请设置有效的持续时段：结束时间须晚于开始时间，且不能超过五年');
+    if (!range && input.deadlineFollowsStart) fail('VALIDATION','请先启用持续时段');
+    const wasFollowing=previous && (previous.deadlineFollowsStart ?? previous.dueAt===previous.startsAt);
+    const deadlineFollowsStart=range && (input.deadlineFollowsStart ?? (previous?.startsAt!=null ? wasFollowing && (input.dueAt===undefined || input.dueAt===previous.dueAt) : input.dueAt===undefined));
+    const dueAt=deadlineFollowsStart?startsAt:input.dueAt===undefined?previous?.dueAt:input.dueAt;
+    // Preserve existing past deadlines when editing unrelated fields.
+    if (!previous || dueAt!==previous.dueAt) deadline(dueAt);
+    return {dueAt,startsAt,endsAt,deadlineFollowsStart:!!deadlineFollowsStart};
+  }
   function content(input) {
     if (!['normal', 'high'].includes(input.priority)) fail('VALIDATION', '请选择任务优先级');
     return { title: text(input.title, '任务名称', 80), description: text(input.description || '', '任务说明', 2000, true), priority: input.priority };
@@ -290,8 +305,8 @@ function createService({ store, now, randomId, hash }) {
         if (input.parentTaskId) fail('VALIDATION', '模板只能用于创建主任务');
         if (!Array.isArray(input.subtasks) || !input.subtasks.length || input.subtasks.length > MAX_STEPS) fail('VALIDATION', `请保留1—${MAX_STEPS}项子任务`);
         const roster = await tx.find('members', { clubId: input.clubId });
-        const dueAt = deadline(input.dueAt);
-        const fields = { ...content(input), ...assignment(input, roster) };
+        const fields = { ...content(input), ...assignment(input, roster), ...schedule(input) };
+        const {dueAt}=fields;
         let sourceTemplate;
         if (input.templateId) {
           const template = await tx.get('templates', input.templateId);
@@ -305,7 +320,7 @@ function createService({ store, now, randomId, hash }) {
           const childDue = step.dueAt === undefined ? relativeDeadline(dueAt, daysBefore) : step.dueAt;
           if (!Number.isSafeInteger(childDue) || childDue <= now()) fail('VALIDATION', `子任务${index + 1}的截止时间已过，请调整日期或提前天数`);
           if (childDue > dueAt) fail('VALIDATION', `子任务${index + 1}不能晚于主任务截止`);
-          return { ...content(step), ...assignment(step, roster, { main: fields }), dueAt: childDue, daysBefore };
+          return { ...content(step), ...assignment(step, roster, { main: fields }), ...schedule({...step,dueAt:childDue},null,true), daysBefore };
         });
         const change = await stamp(tx, input.clubId, 'tasks');
         const common = { clubId: input.clubId, creatorId: me._id, createdAt: now(), updatedAt: now(), revision: 1, syncVersion: change.version, archived: false, completions: {}, sharedCompletion: null };
@@ -317,7 +332,6 @@ function createService({ store, now, randomId, hash }) {
     },
     async createTask(input, identity) {
       const fields = content(input);
-      const dueAt = deadline(input.dueAt);
       const taskId = docKey('t_', input.clubId + ':' + identity, input.requestId);
       return store.transaction(async tx => {
         const me = await member(tx, input.clubId, identity);
@@ -338,7 +352,7 @@ function createService({ store, now, randomId, hash }) {
           ...(parent ? { parentTaskId: parent._id, parentCreatorId: parent.creatorId } : {}),
           _id: taskId, syncVersion: change.version,
           clubId: input.clubId, creatorId: me._id, participantIds, mode: input.mode,
-          dueAt, createdAt: now(), updatedAt: now(), revision: 1, archived: false,
+          ...schedule(input,null,!!parent), createdAt: now(), updatedAt: now(), revision: 1, archived: false,
           completions: {}, sharedCompletion: null
         });
         await tx.put('tasks', taskId, task);
@@ -352,8 +366,7 @@ function createService({ store, now, randomId, hash }) {
         if (!canManage(task, me)) fail('FORBIDDEN', '仅发布者或社团创建者可以修改任务');
         if (task.archived) fail('ARCHIVED', '任务已归档');
         if (task.revision !== input.revision) fail('CONFLICT', '任务已被更新，请返回任务详情后重新编辑');
-        // Existing past deadlines remain editable without silently shifting time.
-        const dueAt = input.dueAt === task.dueAt ? task.dueAt : deadline(input.dueAt);
+        const timing=schedule(input,task,!!task.parentTaskId);
         let participantIds = task.participantIds;
         if (task.parentTaskId && (input.participantIds !== undefined || input.participantDepartment)) {
           const roster = await tx.find('members', { clubId: task.clubId });
@@ -364,9 +377,9 @@ function createService({ store, now, randomId, hash }) {
             participantIds = requested;
           }
         }
-        if (task.title === fields.title && task.description === fields.description && task.priority === fields.priority && task.dueAt === dueAt && participantIds === task.participantIds) return unchanged(tx, task.clubId, { taskId: task._id, task });
+        if (task.title === fields.title && task.description === fields.description && task.priority === fields.priority && Object.entries(timing).every(([key,value])=>(task[key] ?? (key==='deadlineFollowsStart'?false:null))===value) && participantIds === task.participantIds) return unchanged(tx, task.clubId, { taskId: task._id, task });
         const change = await stamp(tx, task.clubId, 'tasks');
-        const updated = Object.assign({}, task, fields, { dueAt, participantIds, updatedAt: now(), revision: task.revision + 1, syncVersion: change.version });
+        const updated = Object.assign({}, task, fields, timing, { participantIds, updatedAt: now(), revision: task.revision + 1, syncVersion: change.version });
         await tx.put('tasks', task._id, updated);
         return Object.assign(change, { taskId: task._id, task: updated });
       });

@@ -331,3 +331,20 @@ test('department template rules and following assignees persist through the actu
   assert.deepEqual(board.tasks.find(t=>t._id===tasks[1]._id).participantIds,tasks[0].participantIds);
   assert.ok(tasks.every(t=>!('followMain' in t)&&!('participantDepartment' in t)));
 });
+
+test('optional duration, automatic deadlines and later manual overrides survive SQLite restart and sync',async()=>{
+  const startsAt=Date.now()+4*86400000, endsAt=startsAt+2*3600000;
+  const created=await api('createTask',{clubId,requestId:'duration-worker',title:'定时活动',description:'',mode:'individual',priority:'normal',participantIds:memberIds,startsAt,endsAt});
+  assert.equal(created.task.dueAt,startsAt); assert.equal(created.task.deadlineFollowsStart,true);
+  await mf.dispose(); mf=new Miniflare(options);
+  const board=await api('bootstrap',{clubId}), t=board.tasks.find(t=>t._id===created.taskId);
+  assert.equal(t.startsAt,startsAt); assert.equal(t.endsAt,endsAt);
+  const override=await api('editTask',{...t,taskId:t._id,dueAt:startsAt-86400000,deadlineFollowsStart:false});
+  const shifted=await api('editTask',{...override.task,taskId:t._id,startsAt:startsAt+3600000});
+  assert.equal(shifted.task.dueAt,startsAt-86400000);
+  const delta=await api('sync',{clubId,since:board.version});
+  assert.equal(delta.tasks[0].startsAt,startsAt+3600000); assert.equal(delta.tasks[0].deadlineFollowsStart,false);
+  assert.equal((await post('/api',{action:'createTask',input:{...t,requestId:'duration-child-worker',parentTaskId:t._id}},owner.token)).status,400);
+  const removed=await api('editTask',{...shifted.task,taskId:t._id,startsAt:null,endsAt:null});
+  assert.equal(removed.task.startsAt,null); assert.equal(removed.task.dueAt,startsAt-86400000);
+});
