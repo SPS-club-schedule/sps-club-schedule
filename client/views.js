@@ -5,6 +5,8 @@ import { e, button, link, error, busy, field, syncRow, nav } from './ui';
 import { templatePicker, stepEditors } from './template-views';
 import { roleLabel, isAdmin } from '../shared/permissions';
 import { DEPARTMENTS, departmentLabel, invitationToken } from '../shared/departments';
+import { resolveParticipants } from '../shared/assignments';
+import { assigneePicker } from './assignee-picker';
 export { e } from './ui';
 export { templates, templateEditor } from './template-views';
 export { admin, adminEditor, resetPassword } from './admin-views';
@@ -66,10 +68,11 @@ export function detail(s) {
 }
 export function editor(s) {
   const f=s.form, b=s.editBoard, editing=!!s.id, child=!!s.parent, assignable=!editing || s.canReassign;
+  const ids=b?resolveParticipants(f,b.members):[];
   return `<section class="page">${link(s.id?'/task?id='+encodeURIComponent(s.id):s.parent?'/task?id='+encodeURIComponent(s.parent._id):'/board','← 返回','plain small')}<div class="eyebrow section">MAKE THINGS HAPPEN</div><h1 class="h1 space">${editing?(child?'编辑子任务':'编辑任务'):(child?'分配一项子任务':'安排一件新事情')}</h1>${child?`<div class="space">${link('/task?id='+encodeURIComponent(s.parent._id),'主任务：'+e(s.parent.title),'parent-task-link')}</div>`:''}<p class="muted space">明确一件事，约好一个时间，一起向前。</p>${error(s)}
   ${!b?'<div class="empty">正在加载成员…</div>':`<form id="task-form" data-form="task" class="section"><fieldset ${busy(s)}>${!editing&&!child?templatePicker(s):''}${field('title',child?'子任务名称':'任务名称',f.title,'text','required maxlength="80" placeholder="例如：确认周末分享会的参加时间"')}<div class="field"><label class="label" for="description">任务说明 <span class="muted small">选填</span></label><textarea name="description" id="description" maxlength="2000" placeholder="要做什么？完成后需要交付什么？">${e(f.description)}</textarea></div>
   <div class="row">${field('date','截止日期 · 北京时间',f.date,'date','required')}${field('time','时间',f.time,'time','required')}</div><div class="field"><div class="label">完成方式</div>${[['individual','逐人完成','每位参与者分别打勾，全部完成后任务结束。'],['shared','协作完成','指定负责人，其中任一人完成后整项任务结束。']].map(([v,l,d])=>button('mode',`<span class="row between"><span class="option-title">${l}</span><span>${f.mode===v?'●':'○'}</span></span><span class="hint">${d}</span>`,'mode-option full '+(f.mode===v?'selected':''),`data-value="${v}" ${editing?'disabled':''}`)).join('')}</div>
-  <div class="field"><div class="row between"><div class="label">${child?'子任务负责人':'参与成员'} · ${f.participantIds.length} 人</div>${assignable?button('allMembers',f.participantIds.length===b.members.length?'取消全选':'选择全体','plain small'):''}</div><div class="chips">${b.members.map(m=>button('participant',(f.participantIds.includes(m.id)?'✓ ':'')+e(m.name),'chip '+(f.participantIds.includes(m.id)?'active':''),`data-id="${e(m.id)}" ${assignable?'':'disabled'}`)).join('')}</div><p class="hint">${child?(assignable?'指定负责人后，子任务与截止时间会出现在对方的“我的待办”和日历中。':'子任务已有完成记录，撤销完成后可调整负责人。'):editing?'发布后保留完成方式和参与名单，以保护已有记录。':'名单以发布时为准，新加入的成员不会自动加入旧任务。'}</p></div>
+  <div class="field"><div class="row between"><div class="label">${child?'子任务负责人':'参与成员'} · ${ids.length} 人</div>${assignable?button('allMembers',ids.length===b.members.length?'取消全选':'选择全体','plain small'):''}</div>${assigneePicker(f,b,{disabled:!assignable})}<p class="hint">${child?(assignable?'指定负责人后，子任务与截止时间会出现在对方的“我的待办”和日历中。':'子任务已有完成记录，撤销完成后可调整负责人。'):editing?'发布后保留完成方式和参与名单，以保护已有记录。':'名单以发布时为准，新加入的成员不会自动加入旧任务。'}</p></div>
   <div class="field"><div class="label">优先级</div><div class="chips">${[['normal','普通'],['high','优先处理']].map(([v,l])=>button('priority',l,'chip '+(f.priority===v?'active':''),`data-value="${v}"`)).join('')}</div></div>${!editing&&!child?stepEditors(s):''}</fieldset></form>`}</section>
   <footer class="footer"><button type="submit" form="task-form" class="primary full" ${s.busy||!b?'disabled':''}>${s.busy?'正在保存…':editing?'保存修改':child?'发布子任务':'发布任务'} →</button></footer>`;
 }

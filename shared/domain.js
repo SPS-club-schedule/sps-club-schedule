@@ -2,6 +2,7 @@
 const { seminarTemplate, relativeDeadline, MAX_STEPS } = require('./templates');
 const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments');
 const { isAdmin } = require('./permissions');
+const { resolveParticipants } = require('./assignments');
 
 // Shared by the cloud function and the local demonstration. Identity is injected
 // by the adapter; no action trusts a member ID supplied as the caller.
@@ -45,12 +46,17 @@ function createService({ store, now, randomId, hash }) {
     return { title: text(input.title, '任务名称', 80), description: text(input.description || '', '任务说明', 2000, true), priority: input.priority };
   }
   function canManage(task, me) { return task.creatorId === me._id || task.parentCreatorId === me._id || me.role === 'owner'; }
-  function assignment(input, roster, optional = false) {
+  function assignment(input, roster, { optional = false, template = false, main = null } = {}) {
     if (!['individual', 'shared'].includes(input.mode)) fail('VALIDATION', '请选择完成方式');
-    if (!Array.isArray(input.participantIds) || (!optional && !input.participantIds.length) || input.participantIds.length > 200) fail('VALIDATION', optional ? '默认负责人最多200人' : '请为每项任务选择1—200位负责人');
-    const participantIds = [...new Set(input.participantIds)];
+    const department = input.participantDepartment === undefined ? '' : input.participantDepartment;
+    if (!validDepartment(department)) fail('VALIDATION', '请选择有效的负责部门');
+    if (input.followMain !== undefined && typeof input.followMain !== 'boolean') fail('VALIDATION', '请选择有效的负责人设置');
+    if (input.followMain && (!main || department)) fail('VALIDATION', '仅子任务可跟随主任务负责人，且不能同时指定部门');
+    if (!Array.isArray(input.participantIds) || input.participantIds.length > 200) fail('VALIDATION', '负责人名单格式无效或超过200人');
+    const participantIds = template && (department || input.followMain) ? [] : [...new Set(resolveParticipants(input, roster, main))];
+    if ((!optional && !participantIds.length) || participantIds.length > 200) fail('VALIDATION', department ? `${departmentLabel(department)}须有1—200位成员才能分配任务` : '请为每项任务选择1—200位负责人');
     if (participantIds.some(id => !roster.some(m => m._id === id))) fail('VALIDATION', '负责人必须是本社团成员');
-    return { mode: input.mode, participantIds };
+    return { mode: input.mode, participantIds, ...(template ? { participantDepartment: department, ...(main ? { followMain: input.followMain === true } : {}) } : {}) };
   }
   function offset(value) {
     if (!Number.isInteger(value) || value < 0 || value > 365) fail('VALIDATION', '提前天数须为0—365的整数');
@@ -58,12 +64,13 @@ function createService({ store, now, randomId, hash }) {
   }
   function templateContent(input, roster) {
     if (!Array.isArray(input.steps) || !input.steps.length || input.steps.length > MAX_STEPS) fail('VALIDATION', `模板须包含1—${MAX_STEPS}项子任务`);
+    const main = assignment(input, roster, { optional: true, template: true });
     return {
       name: text(input.name, '模板名称', 80), category: text(input.category || '', '分类', 30, true) || '未分类',
-      ...content(input), ...assignment(input, roster, true),
+      ...content(input), ...main,
       steps: input.steps.map(step => {
         if (!step || typeof step !== 'object') fail('VALIDATION', '子任务格式无效');
-        return { ...content(step), ...assignment(step, roster, true), daysBefore: offset(step.daysBefore) };
+        return { ...content(step), ...assignment(step, roster, { optional: true, template: true, main }), daysBefore: offset(step.daysBefore) };
       })
     };
   }
@@ -298,7 +305,7 @@ function createService({ store, now, randomId, hash }) {
           const childDue = step.dueAt === undefined ? relativeDeadline(dueAt, daysBefore) : step.dueAt;
           if (!Number.isSafeInteger(childDue) || childDue <= now()) fail('VALIDATION', `子任务${index + 1}的截止时间已过，请调整日期或提前天数`);
           if (childDue > dueAt) fail('VALIDATION', `子任务${index + 1}不能晚于主任务截止`);
-          return { ...content(step), ...assignment(step, roster), dueAt: childDue, daysBefore };
+          return { ...content(step), ...assignment(step, roster, { main: fields }), dueAt: childDue, daysBefore };
         });
         const change = await stamp(tx, input.clubId, 'tasks');
         const common = { clubId: input.clubId, creatorId: me._id, createdAt: now(), updatedAt: now(), revision: 1, syncVersion: change.version, archived: false, completions: {}, sharedCompletion: null };
@@ -311,17 +318,13 @@ function createService({ store, now, randomId, hash }) {
     async createTask(input, identity) {
       const fields = content(input);
       const dueAt = deadline(input.dueAt);
-      if (!['individual', 'shared'].includes(input.mode)) fail('VALIDATION', '请选择完成方式');
-      if (!Array.isArray(input.participantIds) || !input.participantIds.length || input.participantIds.length > 200) fail('VALIDATION', '请选择1—200位参与成员');
-      const participantIds = [...new Set(input.participantIds)];
-      await member(store, input.clubId, identity);
-      const roster = await store.find('members', { clubId: input.clubId });
-      if (participantIds.some(id => !roster.some(m => m._id === id))) fail('VALIDATION', '参与人必须是本社团成员');
       const taskId = docKey('t_', input.clubId + ':' + identity, input.requestId);
       return store.transaction(async tx => {
         const me = await member(tx, input.clubId, identity);
         const previous = await tx.get('tasks', taskId);
         if (previous) return unchanged(tx, input.clubId, { taskId, task: previous });
+        const roster = await tx.find('members', { clubId: input.clubId });
+        const { participantIds } = assignment(input, roster);
         let parent = null;
         if (input.parentTaskId != null && input.parentTaskId !== '') {
           parent = await tx.get('tasks', input.parentTaskId);
@@ -352,14 +355,12 @@ function createService({ store, now, randomId, hash }) {
         // Existing past deadlines remain editable without silently shifting time.
         const dueAt = input.dueAt === task.dueAt ? task.dueAt : deadline(input.dueAt);
         let participantIds = task.participantIds;
-        if (task.parentTaskId && input.participantIds !== undefined) {
-          if (!Array.isArray(input.participantIds) || !input.participantIds.length || input.participantIds.length > 200) fail('VALIDATION', '请选择1—200位参与成员');
-          const requested = [...new Set(input.participantIds)];
+        if (task.parentTaskId && (input.participantIds !== undefined || input.participantDepartment)) {
+          const roster = await tx.find('members', { clubId: task.clubId });
+          const { participantIds: requested } = assignment({ ...input, mode: task.mode }, roster);
           const changed = requested.length !== participantIds.length || requested.some(id => !participantIds.includes(id));
           if (changed) {
             if (Object.keys(task.completions).length || task.sharedCompletion) fail('CONFLICT', '子任务已有完成记录，请先撤销完成后再调整负责人');
-            const roster = await tx.find('members', { clubId: task.clubId });
-            if (requested.some(id => !roster.some(m => m._id === id))) fail('VALIDATION', '参与人必须是本社团成员');
             participantIds = requested;
           }
         }

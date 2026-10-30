@@ -312,3 +312,22 @@ test('department registration, joining, admin edits, authorization, rotation and
   assert.equal(roster.find(m=>m.id===target.id).department,'liaison');
   assert.equal(roster.find(m=>m.id===cleared.member.id).department,'');
 });
+
+test('department template rules and following assignees persist through the actual Worker and SQLite restart',async()=>{
+  const invites=await api('getInvite',{clubId});
+  const token=invites.departments.find(d=>d.id==='publicity').token;
+  await api('joinClub',{token,nickname:'owner'});
+  const fields={title:'部门分工',description:'',mode:'individual',priority:'normal',participantIds:[]};
+  const {template}=await api('createTemplate',{...fields,clubId,requestId:'department-template-runtime',name:'部门模板',category:'测试',participantDepartment:'publicity',steps:[{...fields,title:'跟随负责人',daysBefore:1,followMain:true}]});
+  // A member joins after the template was saved; the server uses today's roster.
+  await api('joinClub',{token,nickname:'alice'},alice.token);
+  const {tasks}=await api('createTaskGroup',{...template,clubId,requestId:'department-group-runtime',dueAt:Date.now()+5*86400000,subtasks:template.steps.map(s=>({...s,participantIds:['forged-id']}))});
+  assert.equal(tasks[0].participantIds.length,2);
+  assert.deepEqual(tasks[1].participantIds,tasks[0].participantIds);
+  await mf.dispose(); mf=new Miniflare(options);
+  const board=await api('bootstrap',{clubId});
+  const saved=board.templates.find(t=>t._id===template._id);
+  assert.equal(saved.participantDepartment,'publicity'); assert.equal(saved.steps[0].followMain,true);
+  assert.deepEqual(board.tasks.find(t=>t._id===tasks[1]._id).participantIds,tasks[0].participantIds);
+  assert.ok(tasks.every(t=>!('followMain' in t)&&!('participantDepartment' in t)));
+});

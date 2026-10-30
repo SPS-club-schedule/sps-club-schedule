@@ -5,6 +5,7 @@ import { shiftMonth } from '../shared/calendar';
 import { templateDraft, draftDeadline, MAX_STEPS } from '../shared/templates';
 import { isAdmin } from '../shared/permissions';
 import { departmentLabel, invitationToken } from '../shared/departments';
+import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain } from '../shared/assignments';
 const root = document.getElementById('app');
 let stop = null, generation = 0, inviteKey = '';
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
@@ -153,10 +154,10 @@ function applyTemplate() {
   if (!template) throw new Error('请先选择一个模板');
   const draft=templateDraft(template,s.editBoard.members);
   const { steps, ...main }=draft;
-  s.form={...s.form,...main,participantIds:main.participantIds.length?main.participantIds:s.editBoard.members.map(m=>m.id)};
+  s.form={...s.form,...main,participantIds:main.participantDepartment || main.participantIds.length?main.participantIds:s.editBoard.members.map(m=>m.id)};
   s.steps=steps; s.openSteps=new Set(); s.appliedTemplate={id:template._id,name:template.name};
 }
-const taskFields = f => ({ title:f.title,description:f.description,mode:f.mode,priority:f.priority,participantIds:f.participantIds });
+const taskFields = f => ({ title:f.title,description:f.description,mode:f.mode,priority:f.priority,participantIds:f.participantIds,participantDepartment:f.participantDepartment || '' });
 function focusInvalidField(event) {
   const details=event.target.closest('details');
   if (details) { details.open=true; s.openSteps.add(Number(details.dataset.stepPanel)); }
@@ -221,16 +222,16 @@ root.addEventListener('submit', event => {
     if (kind === 'task') {
       const group=!s.id&&!s.parent&&s.steps.length>0;
       const subtasks=group?s.steps.map((step,index)=>{
-        if (!step.participantIds.length) { s.openSteps.add(index); throw new Error(`请为子任务${index+1}「${step.title}」选择负责人`); }
+        if (!resolveParticipants(step,s.editBoard.members,data).length) { s.openSteps.add(index); throw new Error(`请为子任务${index+1}「${step.title}」选择负责人`); }
         const dueAt=draftDeadline(data,step);
         if(dueAt<=Date.now()) { s.openSteps.add(index); throw new Error(`子任务${index+1}「${step.title}」的截止时间已过，请调整日期或提前天数`); }
-        return {...taskFields(step),daysBefore:step.daysBefore,...(step.customDeadline?{dueAt}:{})};
+        return {...taskFields(step),followMain:step.followMain === true,daysBefore:step.daysBefore,...(step.customDeadline?{dueAt}:{})};
       }):undefined;
       const result = await api.call(s.id?'editTask':group?'createTaskGroup':'createTask', { ...taskFields(data), dueAt: parseDeadline(data.date,data.time), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId, ...(group?{subtasks,templateId:s.appliedTemplate?.id}:{}) });
       go('/task?id='+encodeURIComponent(result.taskId));
     }
     if (kind === 'template') {
-      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),name:data.name,category:data.category,steps:s.steps.map(step=>({...taskFields(step),daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
+      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),name:data.name,category:data.category,steps:s.steps.map(step=>({...taskFields(step),followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
       go('/templates'); toast('共享模板已保存');
     }
     if (kind === 'name') { await api.call('renameMe', { clubId: s.sync.board.club.id, name: data.nickname }); s.form.nickname = undefined; toast('称呼已更新'); }
@@ -246,7 +247,7 @@ root.addEventListener('click', event => {
       applyTemplate();
     }); return;
   }
-  if (['addStep','removeStep','stepUp','stepDown','stepParticipant','stepCustom','stepRelative','assignStepsToMe'].includes(action)) {
+  if (['addStep','removeStep','stepUp','stepDown','stepParticipant','stepDepartment','stepFollow','stepCustom','stepRelative','assignStepsToMe'].includes(action)) {
     const index=Number(el.dataset.index), step=s.steps[index];
     if(action==='addStep'&&s.steps.length<MAX_STEPS) { s.steps.push({title:'',description:'',daysBefore:1,mode:'individual',priority:'normal',participantIds:[],customDeadline:false}); s.openSteps.add(s.steps.length-1); }
     if(action==='removeStep') { s.steps.splice(index,1); s.openSteps=new Set(); }
@@ -254,8 +255,10 @@ root.addEventListener('click', event => {
       const target=index+(action==='stepUp'?-1:1);
       if(target>=0&&target<s.steps.length) { [s.steps[index],s.steps[target]]=[s.steps[target],s.steps[index]]; s.openSteps=new Set([target]); }
     }
-    if(action==='stepParticipant') step.participantIds=step.participantIds.includes(id)?step.participantIds.filter(x=>x!==id):[...step.participantIds,id];
-    if(action==='assignStepsToMe') for(const item of s.steps) item.participantIds=[s.editBoard.me.id];
+    if(action==='stepParticipant') toggleParticipant(step,id,s.editBoard.members,s.form);
+    if(action==='stepDepartment') chooseDepartment(step,value,s.editBoard.members);
+    if(action==='stepFollow') setFollowMain(step,value==='main',s.form,s.editBoard.members);
+    if(action==='assignStepsToMe') for(const item of s.steps) { item.participantIds=[s.editBoard.me.id]; item.participantDepartment=''; item.followMain=false; }
     if(action==='stepRelative') step.customDeadline=false;
     if(action==='stepCustom') {
       try { const p=parts(draftDeadline(s.form,step)); Object.assign(step,{date:p.date,time:p.time,customDeadline:true}); }
@@ -278,8 +281,9 @@ root.addEventListener('click', event => {
     api.sync.touch(); render(); return;
   }
   if (action === 'mode' || action === 'priority') { s.form[action] = value; render(); return; }
-  if (action === 'participant') { s.form.participantIds = s.form.participantIds.includes(id) ? s.form.participantIds.filter(x=>x!==id) : [...s.form.participantIds,id]; render(); return; }
-  if (action === 'allMembers') { s.form.participantIds = s.form.participantIds.length===s.editBoard.members.length ? [] : s.editBoard.members.map(m=>m.id); render(); return; }
+  if (action === 'department') { chooseDepartment(s.form,value,s.editBoard.members); render(); return; }
+  if (action === 'participant') { toggleParticipant(s.form,id,s.editBoard.members); render(); return; }
+  if (action === 'allMembers') { s.form.participantIds = resolveParticipants(s.form,s.editBoard.members).length===s.editBoard.members.length ? [] : s.editBoard.members.map(m=>m.id); s.form.participantDepartment=''; render(); return; }
   if (action === 'chooseClub') { api.setClub(id); go('/board'); return; }
   if (action === 'continue') { s.recovery = ''; go('/board'); return; }
   if (action === 'copyRecovery') { copy(s.recovery); return; }
