@@ -46,6 +46,29 @@ test('public experience files preserve bytes across restart, enforce SPS members
     file=(await manage({action:'restore',id:file.id,revision:file.revision},owner.token)).entry;assert.equal(file.removed,false);
     await manage({action:'folder',path:'2025-2026届/宣传部/海报经验'},member.token);
     await manage({action:'folder',path:file.path+'/子目录'},member.token,409);
+    // Content edits preserve identity, enforce ownership/revisions, update the
+    // downloaded bytes/hash, and never replace a non-text attachment.
+    const markdown='# 经验\n\n$E=mc^2$';
+    let document=(await post('/experience/upload',{requestId:'markdown-document',path:'经验.md',content:Buffer.from(markdown).toString('base64')},member.token)).data.entry;
+    const change={action:'content',id:document.id,revision:document.revision,content:'# 更新\n\n$$\\int_0^1 x^2 dx$$'};
+    assert.equal((await post('/experience/manage',change)).status,401);
+    await manage(change,other.token,403);await manage(change,outsider.token,403);
+    await manage({...change,content:''},member.token,400);
+    await manage({...change,content:'字'.repeat(90000)},member.token,400);
+    await manage({...change,id:file.id,revision:file.revision},member.token,400);
+    document=(await manage(change,member.token)).entry;
+    assert.equal(document.revision,change.revision+1);assert.equal(document.id,change.id);
+    assert.equal(document.size,Buffer.byteLength(change.content));assert.equal(document.sha256,createHash('sha256').update(change.content).digest('hex'));
+    await manage(change,member.token,409);
+    assert.equal(await (await mf.dispatchFetch('http://localhost/experience/files/'+document.id)).text(),change.content);
+    // Verify content survives restart and an administrator can update it.
+    await mf.dispose();mf=new Miniflare(options());
+    assert.equal(await (await mf.dispatchFetch('http://localhost/experience/files/'+document.id)).text(),change.content);
+    document=(await manage({...change,revision:document.revision,content:'管理员更新'},owner.token)).entry;
+    document=(await manage({action:'hide',id:document.id,revision:document.revision},member.token)).entry;
+    await manage({...change,revision:document.revision},member.token,400);
+    const tex=await post('/experience/upload',{requestId:'latex-document',path:'公式.tex',content:Buffer.from('\\frac{1}{2}').toString('base64')},member.token);
+    assert.equal(tex.status,200);
     const large=Buffer.alloc(10*1024*1024,31),largeInput={requestId:'ten-megabyte-file',path:'大文件.zip',content:large.toString('base64')};
     assert.equal((await post('/experience/upload',largeInput,owner.token)).status,200);
     assert.equal((await post('/experience/upload',{...largeInput,requestId:'too-large-file',content:Buffer.alloc(10*1024*1024+1).toString('base64')},owner.token)).status,400);

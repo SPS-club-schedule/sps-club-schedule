@@ -12,12 +12,14 @@ import {personalCalendar} from '../shared/ical';
 import {configureBooking,otherActivities} from './booking';
 import {workspace} from './workspace';
 import {shiftDate,selectedScope} from '../shared/planner';
-import {archivePath,MAX_FILE_BYTES} from '../shared/experience';
+import {archivePath,parentPath,MAX_FILE_BYTES} from '../shared/experience';
 import {experienceRoute} from './experience';
+import {documentKind,documentTemplate,MAX_DOCUMENT_BYTES,documentDirty,readDocument,loadDocumentRenderer,previewDocument} from './experience-document';
 const root = document.getElementById('app');
 const desktop=window.matchMedia('(min-width: 1000px)');
 const workspaceUi={calendarOpen:false,context:'board',clubId:'',planner:{date:parts(Date.now()).date,mode:desktop.matches?'week':'day',showDeadlines:true}};
 let stop = null, generation = 0, inviteKey = '', adminLoad = 0;
+let activeRouteHash=location.hash,documentPreviewTimer;
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
 function go(path) { if (location.hash === '#' + path) route(); else location.hash = path; }
 function render() {
@@ -144,6 +146,13 @@ async function loadBooking() {
   finally {if(ticket===generation){s.bookingLoading=false;render();}}
 }
 async function route() {
+  if(documentDirty(s.experienceDocument)&&location.hash!==activeRouteHash) {
+    const target=location.hash;
+    history.replaceState(null,'',activeRouteHash||'#/experience');
+    if(!await confirmAction('离开未保存的文档？','尚未保存的正文会丢失。可取消并先保存或下载源码。','放弃更改并离开'))return;
+    s.experienceDocument=null;history.replaceState(null,'',target);
+  }
+  activeRouteHash=location.hash;
   const ticket = ++generation; if (stop) stop(); stop = null;
   const url = new URL((location.hash.slice(1) || '/board'), 'https://local.invalid');
   const page = url.pathname.slice(1), invitation = url.searchParams.get('invite');
@@ -154,7 +163,7 @@ async function route() {
   if(['auth','entry','reset'].includes(page)){workspaceUi.calendarOpen=false;workspaceUi.planner.scope=undefined;}
   s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId(),plannerSettings:workspaceUi.planner,booking:s.booking,bookingCheckedAt:s.bookingCheckedAt,experience:page==='experience'&&s.page==='experience'&&s.experienceViewer===(api.user()?.id||'')?s.experience:undefined,experienceViewer:api.user()?.id||'' };
   s.afterAuth=url.searchParams.get('next')==='experience'?'/experience':'';
-  if(page==='experience'){try{s.experiencePath=archivePath(url.searchParams.get('folder')||'',{empty:true});}catch{s.experiencePath='';}s.experienceForm={};s.experienceFiles=[];}
+  if(page==='experience'){try{s.experiencePath=archivePath(url.searchParams.get('folder')||'',{empty:true});}catch{s.experiencePath='';}s.experienceForm={};s.experienceFiles=[];s.experienceDocumentId=url.searchParams.get('document');}
   if (page==='reset') {
     s.resetToken=url.searchParams.get('token') || ''; s.form={username:url.searchParams.get('username') || ''};
     // Keep the bearer secret out of the URL after reading the reset link.
@@ -165,7 +174,13 @@ async function route() {
   if (page === 'auth' || page==='reset') return;
   if(page==='experience') {
     if(api.user()){try{await api.bootstrap();if(ticket!==generation)return;s.sync=api.sync.getState();}catch(error){if(ticket!==generation)return;s.error=error.message;}}
-    await loadExperience();return;
+    await loadExperience();
+    if(ticket===generation&&s.experienceDocumentId)await perform(async()=>{
+      const item=s.experience?.entries.find(x=>x.id===s.experienceDocumentId&&!x.removed);
+      if(!item||!documentKind(item.path))throw new Error('此文档不可在线查看，请返回目录刷新或下载文件');
+      const doc=await readDocument(item);if(ticket===generation)s.experienceDocument=doc;
+    });
+    return;
   }
   try {
     if (page==='account') { await loadAccount(); if(ticket===generation) render(); return; }
@@ -254,6 +269,20 @@ function fileBase64(file) {
 function submitExperience(kind,event) {
   const ticket=generation,form={...s.experienceForm,...Object.fromEntries(new FormData(event.target))},files=[...(s.experienceFiles||[])],editing=s.experienceEditing,path=s.experiencePath;
   perform(async()=>{
+    if(kind==='experienceDocument'){
+      const doc=s.experienceDocument,source=doc.source;
+      const path=archivePath(doc.path,{file:true});
+      if(!documentKind(path))throw new Error('在线文档请使用 .md、.tex 或 .txt 扩展名');
+      if(!source.trim())throw new Error('文档内容不能为空');
+      if(new TextEncoder().encode(source).length>MAX_DOCUMENT_BYTES)throw new Error('在线文档最多 256 KB');
+      const result=doc.newFile?await api.experienceUpload({path,requestId:doc.requestId,content:await fileBase64(new Blob([source]))}):await api.experienceManage({action:'content',id:doc.item.id,revision:doc.item.revision,content:source});
+      if(ticket!==generation)return;
+      doc.item=result.entry;doc.newFile=false;doc.original=source;doc.path=result.entry.path;doc.baseUrl=api.experienceFileUrl(result.entry.id);
+      s.experiencePath=parentPath(doc.path);s.experienceDocumentId=doc.item.id;
+      activeRouteHash='#'+experienceRoute(s.experiencePath)+(s.experiencePath?'&':'?')+'document='+encodeURIComponent(doc.item.id);
+      history.replaceState(null,'',activeRouteHash);
+      await loadExperience();toast('正文已保存并公开');return;
+    }
     if(kind==='experienceFolder') {
       const folder=archivePath((path?path+'/':'')+(form.experienceFolder||''));
       await api.experienceManage({action:'folder',path:folder});
@@ -276,7 +305,31 @@ function submitExperience(kind,event) {
     if(ticket===generation){s.experienceFormMode='';s.experienceForm={};s.experienceProgress='';go(experienceRoute(folder));toast('资料已公开');}
   });
 }
-function experienceAction(action,id) {
+async function experienceAction(action,id) {
+  if(action.startsWith('experienceDocument')) {
+    const doc=s.experienceDocument;
+    if(action==='experienceDocumentNew')return perform(async()=>{
+      const ticket=generation;await loadDocumentRenderer();if(ticket!==generation)return;
+      s.experienceDocument={path:(s.experiencePath?s.experiencePath+'/':'')+'未命名.md',source:documentTemplate('markdown'),original:'',editing:true,newFile:true,requestId:api.requestId()};
+    });
+    if(!doc)return;
+    if(action==='experienceDocumentDownload'){
+      const url=URL.createObjectURL(new Blob([doc.source],{type:'text/plain;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=doc.path.split('/').at(-1);a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return;
+    }
+    if(s.busy)return;
+    if(action==='experienceDocumentEdit'&&doc.item?.canEdit){doc.editing=true;render();return;}
+    if(action==='experienceDocumentCopy'&&s.experience?.canWrite){
+      doc.path=doc.path.replace(/\.(md|tex|txt)$/i,'-网页副本.$1');doc.newFile=true;doc.editing=true;doc.requestId=api.requestId();render();return;
+    }
+    if(['experienceDocumentClose','experienceDocumentCancel'].includes(action)){
+      const ticket=generation;
+      if(documentDirty(doc)&&!await confirmAction('放弃未保存的更改？','可以取消并先保存，或下载源码保留当前正文。','放弃更改'))return;
+      if(ticket!==generation)return;
+      if(action==='experienceDocumentCancel'&&!doc.newFile){doc.source=doc.original;doc.editing=false;render();}
+      else{s.experienceDocument=null;go(experienceRoute(s.experiencePath));}return;
+    }
+    return;
+  }
   if(action==='experienceRefresh'){perform(loadExperience);return;}
   if(action==='experienceUploadForm'||action==='experienceFolderForm'){s.experienceEditing=null;s.experienceFormMode=action==='experienceUploadForm'?'upload':'folder';s.experienceForm={experienceFolder:action==='experienceUploadForm'?s.experiencePath:''};s.experienceFiles=[];s.experienceProgress='';s.experienceTrash=false;render();return;}
   if(action==='experienceCancel'){s.experienceEditing=null;s.experienceFormMode='';s.experienceForm={};s.experienceFiles=[];render();return;}
@@ -295,6 +348,16 @@ function inputChanged(event) {
   const { name, value } = event.target;
   if (!name) return;
   if(name.startsWith('experience')) {
+    if(name==='experienceDocumentSource'||name==='experienceDocumentPath'||name==='experienceDocumentFormat'){
+      const doc=s.experienceDocument;if(!doc?.editing)return;
+      if(name==='experienceDocumentFormat'){const template=doc.newFile&&doc.source===documentTemplate(documentKind(doc.path));doc.path=doc.path.replace(/\.[^.\/]*$/, '')+'.'+value;if(template)doc.source=documentTemplate(documentKind(doc.path));render();return;}
+      if(name==='experienceDocumentSource')doc.source=value;else doc.path=value;
+      const status=root.querySelector('[data-document-status]');if(status)status.textContent=(documentDirty(doc)?'有未保存的更改':'所有更改已保存')+' · 保存后公开可读';
+      clearTimeout(documentPreviewTimer);documentPreviewTimer=setTimeout(()=>{
+        if(s.experienceDocument!==doc)return;
+        const preview=root.querySelector('[data-document-preview]');if(preview)preview.innerHTML=previewDocument(doc);
+      },180);return;
+    }
     if(name==='experienceSearch'){s.experienceSearch=value;s.experienceTrash=false;render();}
     else if(name==='experienceFiles'){if(event.type==='change'){s.experienceFiles=Array.from(event.target.files||[]).map(file=>({file,requestId:api.requestId()}));s.experienceProgress='';render();}}
     else{s.experienceForm||={};s.experienceForm[name]=value;}
@@ -516,6 +579,7 @@ root.addEventListener('click', event => {
   });
 });
 window.addEventListener('hashchange', route);
+window.addEventListener('beforeunload',event=>{if(documentDirty(s.experienceDocument)){event.preventDefault();event.returnValue='';}});
 window.addEventListener('sps:logged-out', () => go(s.page==='experience'?experienceRoute(s.experiencePath):'/auth'));
 window.addEventListener('online', () => api.sync.setOnline(true));
 window.addEventListener('offline', () => api.sync.setOnline(false));

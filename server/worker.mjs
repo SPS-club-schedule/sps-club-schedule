@@ -187,7 +187,7 @@ export class ClubService extends DurableObject {
           const account=this.authenticate(request);
           this.limit('experience-write:'+account.id,100,3600000);
           if(path==='/experience/upload')this.limit('experience-upload:'+account.id,30,3600000);
-          data=await readBody(request,path==='/experience/upload'?14*1024*1024+32768:32768);
+          data=await readBody(request,path==='/experience/upload'?14*1024*1024+32768:2*1024*1024);
         }
         return await this.ctx.blockConcurrencyWhile(async()=>{
           try {

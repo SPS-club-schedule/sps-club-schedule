@@ -1,6 +1,6 @@
 'use strict';
 const MAX_FILE_BYTES=10*1024*1024, MAX_TOTAL_BYTES=256*1024*1024, MAX_ENTRIES=2000;
-const EXTENSIONS=['pdf','doc','docx','ppt','pptx','xls','xlsx','csv','md','txt','rtf','odt','ods','odp','png','jpg','jpeg','gif','webp','zip','7z'];
+const EXTENSIONS=['pdf','doc','docx','ppt','pptx','xls','xlsx','csv','md','tex','txt','rtf','odt','ods','odp','png','jpg','jpeg','gif','webp','zip','7z'];
 function archivePath(value,{file=false,empty=false}={}) {
   if(typeof value!=='string')throw new Error('请填写文件夹或文件路径');
   const path=value.normalize('NFC');

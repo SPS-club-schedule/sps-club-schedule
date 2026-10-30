@@ -1,6 +1,8 @@
 import {createHash,randomBytes} from 'node:crypto';
 import domain from '../shared/domain.js';
 import rules from '../shared/experience.js';
+import documentRules from '../shared/document-rules.js';
+const {MAX_DOCUMENT_BYTES,documentKind}=documentRules;
 const {ClubError}=domain;
 const {archivePath,parents,fileName,MAX_FILE_BYTES,MAX_TOTAL_BYTES,MAX_ENTRIES}=rules;
 const fail=(code,message)=>{throw new ClubError(code,message);};
@@ -72,9 +74,19 @@ export function createExperienceService(ctx,env,store) {
       if(!row)fail('NOT_FOUND','资料不存在');
       if(!editable(m,row))fail('FORBIDDEN','只能整理自己上传的资料；网站维护管理可整理全部档案');
       if(row.revision!==data.revision)fail('CONFLICT','资料已更新，请刷新后再试');
-      if(!['edit','hide','restore'].includes(data.action))fail('VALIDATION','操作无效');
+      if(!['edit','content','hide','restore'].includes(data.action))fail('VALIDATION','操作无效');
       return ctx.storage.transactionSync(()=>{
         let path=row.path,desc=row.description,removed=row.removed;
+        if(data.action==='content'){
+          if(row.removed||row.kind!=='file'||!documentKind(row.path))fail('VALIDATION','仅支持编辑公开的 Markdown、LaTeX 或纯文本文件');
+          if(typeof data.content!=='string'||!data.content.trim())fail('VALIDATION','文档内容不能为空');
+          const bytes=Buffer.from(data.content,'utf8');
+          if(bytes.length>MAX_DOCUMENT_BYTES)fail('VALIDATION','在线文档最多 256 KB');
+          if(count().bytes-row.size+bytes.length>MAX_TOTAL_BYTES)fail('VALIDATION','网页档案容量已满');
+          sql.exec('DELETE FROM experience_chunks WHERE file_id=?',row.id);
+          for(let offset=0,part=0;offset<bytes.length;offset+=256*1024,part++)sql.exec('INSERT INTO experience_chunks VALUES(?,?,?)',row.id,part,bytes.subarray(offset,offset+256*1024));
+          sql.exec('UPDATE experience_entries SET size=?,digest=? WHERE id=?',bytes.length,digest(bytes),row.id);
+        }
         if(data.action==='edit'){
           if(row.removed||row.kind!=='file')fail('VALIDATION','请先恢复文件，再编辑资料');
           path=cleanPath(data.path,true);desc=description(data.description);

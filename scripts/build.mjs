@@ -10,10 +10,13 @@ const bookingApi=new URL(process.env.BOOKING_API_BASE || 'https://sysu-phy-club-
 if(bookingApi.username || bookingApi.password || bookingApi.search || bookingApi.hash || bookingApi.pathname!=='/' || (!['127.0.0.1','localhost'].includes(bookingApi.hostname) && bookingApi.protocol!=='https:')) throw new Error('Invalid booking API origin');
 if (api.username || api.password || api.search || api.hash || api.pathname !== '/' || (!['127.0.0.1','localhost'].includes(api.hostname) && api.protocol !== 'https:')) throw new Error('API_BASE_URL must be a bare HTTPS origin (HTTP permitted only for localhost)');
 if (process.env.CI && !process.env.API_BASE_URL) throw new Error('Set the GitHub repository variable API_BASE_URL before deployment');
+await fs.rm(path.join(root,'dist/assets'), {recursive:true,force:true});
 await fs.mkdir(path.join(root,'dist/assets'), { recursive:true });
-await build({ entryPoints:[path.join(root,'client/app.js')], outfile:path.join(root,'dist/assets/app.js'), bundle:true, minify:true, platform:'browser', target:'es2020' });
+await build({ entryPoints:[path.join(root,'client/app.js')], outdir:path.join(root,'dist/assets'), entryNames:'app', chunkNames:'[name]-[hash]', splitting:true, format:'esm', bundle:true, minify:true, platform:'browser', target:'es2020' });
 const css = await Promise.all(['style.css','web.css','workspace.css','experience.css'].map(name=>fs.readFile(path.join(root,'client',name),'utf8')));
-await fs.writeFile(path.join(root,'dist/assets/app.css'),css.join('\n'));
+const mathCss=await fs.readFile(path.join(root,'node_modules/katex/dist/katex.min.css'),'utf8');
+await fs.cp(path.join(root,'node_modules/katex/dist/fonts'),path.join(root,'dist/assets/fonts'),{recursive:true});
+await fs.writeFile(path.join(root,'dist/assets/app.css'),css.join('\n')+'\n'+mathCss);
 const csp = `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ${api.origin} ${bookingApi.origin}; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'`;
 const html=(await fs.readFile(path.join(root,'client/index.html'),'utf8')).replace('__CSP__',csp);
 await fs.writeFile(path.join(root,'dist/index.html'),html);
