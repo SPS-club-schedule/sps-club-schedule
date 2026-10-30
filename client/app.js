@@ -12,6 +12,8 @@ import {personalCalendar} from '../shared/ical';
 import {configureBooking,otherActivities} from './booking';
 import {workspace} from './workspace';
 import {shiftDate,selectedScope} from '../shared/planner';
+import {archivePath,MAX_FILE_BYTES} from '../shared/experience';
+import {experienceRoute} from './experience';
 const root = document.getElementById('app');
 const desktop=window.matchMedia('(min-width: 1000px)');
 const workspaceUi={calendarOpen:false,context:'board',clubId:'',planner:{date:parts(Date.now()).date,mode:desktop.matches?'week':'day',showDeadlines:true}};
@@ -30,7 +32,7 @@ function render() {
   const agendaScroll = root.querySelector('.calendar-agenda-list')?.scrollTop;
   const agendaFocus = active?.matches('.calendar-agenda-list');
   const scroll = window.scrollY;
-  const html = ['board','mine','calendar'].includes(s.page) ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, 'admin-archives':views.archives, reset:views.resetPassword, account:views.accountSettings }[s.page] || views.auth)(s);
+  const html = ['board','mine','calendar'].includes(s.page) ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, experience:views.experience, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, 'admin-archives':views.archives, reset:views.resetPassword, account:views.accountSettings }[s.page] || views.auth)(s);
   root.innerHTML = workspace(s,html,workspaceUi);
   const editorPage=root.querySelector('.editor-pane .page');if(editorPage)editorPage.dataset.scrollKey=s.page+'-'+(s.id||'new');
   for(const el of root.querySelectorAll('[data-scroll-key]')){const pos=regionScroll.get(el.dataset.scrollKey);if(pos){el.scrollTop=pos[0];el.scrollLeft=pos[1];}}
@@ -145,12 +147,14 @@ async function route() {
   const ticket = ++generation; if (stop) stop(); stop = null;
   const url = new URL((location.hash.slice(1) || '/board'), 'https://local.invalid');
   const page = url.pathname.slice(1), invitation = url.searchParams.get('invite');
-  if (!api.user() && !['auth','reset'].includes(page)) { go('/auth'); return; }
-  if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : '/board'); return; }
+  if (!api.user() && !['auth','reset','experience'].includes(page)) { go('/auth'); return; }
+  if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : url.searchParams.get('next')==='experience'?'/experience':'/board'); return; }
   if(['board','mine','templates'].includes(page))workspaceUi.context=page;
   if(page==='calendar')workspaceUi.calendarOpen=true;
   if(['auth','entry','reset'].includes(page)){workspaceUi.calendarOpen=false;workspaceUi.planner.scope=undefined;}
-  s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId(),plannerSettings:workspaceUi.planner,booking:s.booking,bookingCheckedAt:s.bookingCheckedAt };
+  s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId(),plannerSettings:workspaceUi.planner,booking:s.booking,bookingCheckedAt:s.bookingCheckedAt,experience:page==='experience'&&s.page==='experience'&&s.experienceViewer===(api.user()?.id||'')?s.experience:undefined,experienceViewer:api.user()?.id||'' };
+  s.afterAuth=url.searchParams.get('next')==='experience'?'/experience':'';
+  if(page==='experience'){try{s.experiencePath=archivePath(url.searchParams.get('folder')||'',{empty:true});}catch{s.experiencePath='';}s.experienceForm={};s.experienceFiles=[];}
   if (page==='reset') {
     s.resetToken=url.searchParams.get('token') || ''; s.form={username:url.searchParams.get('username') || ''};
     // Keep the bearer secret out of the URL after reading the reset link.
@@ -159,6 +163,10 @@ async function route() {
   inviteKey = ''; window.scrollTo(0,0); render();
   if (['board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(page)) { stop = api.sync.watch(receive); return; }
   if (page === 'auth' || page==='reset') return;
+  if(page==='experience') {
+    if(api.user()){try{await api.bootstrap();if(ticket!==generation)return;s.sync=api.sync.getState();}catch(error){if(ticket!==generation)return;s.error=error.message;}}
+    await loadExperience();return;
+  }
   try {
     if (page==='account') { await loadAccount(); if(ticket===generation) render(); return; }
     const b = await api.bootstrap({ includeClubs: page === 'entry' });
@@ -230,10 +238,68 @@ async function perform(work) {
   catch (error) { if (ticket === generation) { s.error = error.message; render(); root.querySelector('[role="alert"]')?.scrollIntoView({block:'center'}); } }
   finally { if (ticket === generation) { s.busy = false; render(); } }
 }
+async function loadExperience() {
+  const ticket=generation;
+  const results=await Promise.allSettled([api.experienceList(),fetch(new URL('./experience-index.json',location.href.split('#')[0]),{cache:'no-store'}).then(async response=>{if(!response.ok)throw new Error('仓库档案暂未载入');return response.json();})]);
+  if(ticket!==generation)return;
+  const native=results[0].status==='fulfilled'?results[0].value:{entries:[],canWrite:false};
+  const repo=results[1].status==='fulfilled'?results[1].value:{entries:[]};
+  s.experience={...native,entries:[...(native.entries||[]),...(repo.entries||[])]};
+  s.experienceWarning=results.map((r,i)=>r.status==='rejected'?(i===0?'网页上传档案暂未载入：'+r.reason.message:'仓库档案暂未载入，请刷新重试'):'').filter(Boolean).join('；');
+  render();
+}
+function fileBase64(file) {
+  return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('文件读取失败，请重新选择'));reader.readAsDataURL(file);});
+}
+function submitExperience(kind,event) {
+  const ticket=generation,form={...s.experienceForm,...Object.fromEntries(new FormData(event.target))},files=[...(s.experienceFiles||[])],editing=s.experienceEditing,path=s.experiencePath;
+  perform(async()=>{
+    if(kind==='experienceFolder') {
+      const folder=archivePath((path?path+'/':'')+(form.experienceFolder||''));
+      await api.experienceManage({action:'folder',path:folder});
+      if(ticket===generation){go(experienceRoute(folder));toast('文件夹已创建');}return;
+    }
+    if(kind==='experienceEdit') {
+      await api.experienceManage({action:'edit',id:editing.id,revision:editing.revision,path:form.experienceFullPath,description:form.experienceDescription});
+      if(ticket===generation){s.experienceEditing=null;s.experienceForm={};await loadExperience();toast('资料已整理');}return;
+    }
+    if(!files.length)throw new Error('请先选择文件');
+    const folder=archivePath(form.experienceFolder||'',{empty:true});
+    for(let i=0;i<files.length;i++) {
+      const item=files[i],fullPath=archivePath((folder?folder+'/':'')+item.file.name,{file:true});
+      if(!item.file.size||item.file.size>MAX_FILE_BYTES)throw new Error(item.file.name+'：文件不能为空，且最多 10 MB');
+      if(ticket===generation){s.experienceProgress=`正在上传 ${i+1} / ${files.length}`;render();}
+      try {await api.experienceUpload({path:fullPath,description:form.experienceDescription,requestId:item.requestId,content:await fileBase64(item.file)});}
+      catch(error){if(ticket===generation)s.experienceProgress='重试剩余文件';throw error;}
+      if(ticket===generation)s.experienceFiles=s.experienceFiles.filter(x=>x.requestId!==item.requestId);
+    }
+    if(ticket===generation){s.experienceFormMode='';s.experienceForm={};s.experienceProgress='';go(experienceRoute(folder));toast('资料已公开');}
+  });
+}
+function experienceAction(action,id) {
+  if(action==='experienceRefresh'){perform(loadExperience);return;}
+  if(action==='experienceUploadForm'||action==='experienceFolderForm'){s.experienceEditing=null;s.experienceFormMode=action==='experienceUploadForm'?'upload':'folder';s.experienceForm={experienceFolder:action==='experienceUploadForm'?s.experiencePath:''};s.experienceFiles=[];s.experienceProgress='';s.experienceTrash=false;render();return;}
+  if(action==='experienceCancel'){s.experienceEditing=null;s.experienceFormMode='';s.experienceForm={};s.experienceFiles=[];render();return;}
+  if(action==='experienceTrash'){s.experienceTrash=!s.experienceTrash;s.experienceFormMode='';s.experienceEditing=null;render();return;}
+  const item=s.experience?.entries.find(x=>x.id===id);if(!item?.canEdit)return;
+  if(action==='experienceEdit'){s.experienceEditing=item;s.experienceFormMode='';s.experienceForm={experienceFullPath:item.path,experienceDescription:item.description};render();root.querySelector('.experience-compose')?.scrollIntoView({block:'start'});return;}
+  if(['experienceHide','experienceRestore'].includes(action))perform(async()=>{
+    const ticket=generation;
+    if(action==='experienceHide'&&!await confirmAction('收起这份资料？','资料将从公开档案中隐藏，你仍可在“已收起资料”中恢复。','收起资料'))return;
+    await api.experienceManage({action:action==='experienceHide'?'hide':'restore',id:item.id,revision:item.revision});
+    if(ticket===generation){s.experienceEditing=null;await loadExperience();toast(action==='experienceHide'?'资料已收起':'资料已恢复');}
+  });
+}
 function inputChanged(event) {
   if (s.busy) return;
   const { name, value } = event.target;
   if (!name) return;
+  if(name.startsWith('experience')) {
+    if(name==='experienceSearch'){s.experienceSearch=value;s.experienceTrash=false;render();}
+    else if(name==='experienceFiles'){if(event.type==='change'){s.experienceFiles=Array.from(event.target.files||[]).map(file=>({file,requestId:api.requestId()}));s.experienceProgress='';render();}}
+    else{s.experienceForm||={};s.experienceForm[name]=value;}
+    return;
+  }
   if(name.startsWith('planner')) {
     if(name==='plannerDate'&&value)workspaceUi.planner.date=value;
     if(name==='plannerScope')workspaceUi.planner.scope=selectedScope(s.sync.board?.me,value);
@@ -256,13 +322,14 @@ root.addEventListener('input', inputChanged);
 root.addEventListener('change', inputChanged);
 root.addEventListener('submit', event => {
   event.preventDefault(); const kind = event.target.dataset.form;
+  if(kind?.startsWith('experience')){submitExperience(kind,event);return;}
   const data = { ...s.form, ...Object.fromEntries(new FormData(event.target)) };
   perform(async () => {
     if (kind === 'auth') {
       const result = await api.authenticate(s.authMode, { ...data, mode: s.joinMode });
       s.form.password = ''; s.form.recoveryCode = '';
       if (result.recoveryCode) { s.recovery = result.recoveryCode; render(); }
-      else go(data.invite ? '/entry?invite='+encodeURIComponent(data.invite) : '/board');
+      else go(data.invite ? '/entry?invite='+encodeURIComponent(data.invite) : s.afterAuth||'/board');
     }
     if (kind==='resetPassword') {
       if (data.password!==data.confirmPassword) throw new Error('两次输入的密码不一致');
@@ -315,6 +382,7 @@ root.addEventListener('click', event => {
   const el = event.target.closest('[data-action]'); if (!el || el.disabled) return;
   const { action, value, id } = el.dataset;
   if (s.busy) return;
+  if(action.startsWith('experience')){experienceAction(action,id);return;}
   if(action==='closePlanner'){workspaceUi.calendarOpen=false;if(s.page==='calendar')go('/'+(workspaceUi.context==='mine'?'mine':'board'));else render();return;}
   if(action==='plannerMove'){workspaceUi.planner.date=shiftDate(workspaceUi.planner.date,Number(value)*(workspaceUi.planner.mode==='day'?1:7));render();return;}
   if(action==='plannerToday'){workspaceUi.planner.date=parts(Date.now()).date;render();return;}
@@ -448,7 +516,7 @@ root.addEventListener('click', event => {
   });
 });
 window.addEventListener('hashchange', route);
-window.addEventListener('sps:logged-out', () => go('/auth'));
+window.addEventListener('sps:logged-out', () => go(s.page==='experience'?experienceRoute(s.experiencePath):'/auth'));
 window.addEventListener('online', () => api.sync.setOnline(true));
 window.addEventListener('offline', () => api.sync.setOnline(false));
 document.addEventListener('visibilitychange', () => api.sync.setVisible(!document.hidden));

@@ -15,19 +15,19 @@ function saveSession(value) {
   session = value; if (value) sessionStorage.setItem(SESSION_KEY, JSON.stringify(value)); else sessionStorage.removeItem(SESSION_KEY);
   inviteCache = null; sync.select();
 }
-async function request(path, data) {
+async function request(path, data, {method='POST',timeoutMs=20000}={}) {
   if (!navigator.onLine) throw Object.assign(new Error('网络已断开，请联网后重试'), { code: 'OFFLINE' });
-  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 20000);
+  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(base + path, {
-      method: 'POST', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer',
+      method, cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer',
       headers: { 'Content-Type': 'application/json', ...(session ? { Authorization: 'Bearer ' + session.token } : {}) },
-      body: JSON.stringify(data), signal: controller.signal
+      ...(method==='POST'?{body:JSON.stringify(data)}:{}), signal: controller.signal
     });
     let result;
     try { result = await response.json(); } catch { throw new Error('服务返回异常，请稍后重试'); }
     if (!response.ok || !result.ok) {
-      if (response.status === 401 && path === '/api') { saveSession(null); window.dispatchEvent(new Event('sps:logged-out')); }
+      if (response.status === 401 && (path === '/api'||path.startsWith('/experience'))) { saveSession(null); window.dispatchEvent(new Event('sps:logged-out')); }
       throw Object.assign(new Error(result.message || '操作失败'), { code: result.code || 'SERVER' });
     }
     if (result.data.currentUser && session && result.data.currentUser.id === session.user.id) {
@@ -47,6 +47,11 @@ export const call = (action, input) => sync.mutate(action, input);
 export const adminMembers = clubId => transport('adminMembers', { clubId });
 export const adminArchives = clubId => transport('adminArchives', { clubId });
 export const bookingStatus = clubId => transport('bookingStatus', {clubId});
+export const experienceList=()=>request('/experience',undefined,{method:'GET'});
+export const experienceUpload=data=>request('/experience/upload',data,{timeoutMs:60000});
+export const experienceManage=data=>request('/experience/manage',data);
+export const experienceFileUrl=id=>base+'/experience/files/'+encodeURIComponent(id);
+export const experienceIndexUrl=()=>base+'/experience';
 export const accountSettings = () => transport('accountSettings', {});
 export const changeUsername = input => transport('accountChangeUsername', input);
 export const changePassword = input => transport('accountChangePassword', input);

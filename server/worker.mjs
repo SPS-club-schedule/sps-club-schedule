@@ -5,6 +5,7 @@ import { createStore } from './store.mjs';
 import { createAdminService, bumpAccountRevision } from './admin.mjs';
 import { createAccountService } from './account.mjs';
 import { createBookingSync, authorized } from './booking-sync.mjs';
+import { createExperienceService } from './experience.mjs';
 const { createService, ClubError } = domain;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const random = () => randomBytes(32).toString('hex');
@@ -38,14 +39,14 @@ function passwordHash(value, salt) {
   return scryptSync(value, salt, 32, { N: 32768, r: 8, p: 3, maxmem: 64 * 1024 * 1024 }).toString('hex');
 }
 function equal(a, b) { return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex')); }
-async function readBody(request) {
+async function readBody(request, maximum = 32768) {
   if (!(request.headers.get('Content-Type') || '').startsWith('application/json')) fail('VALIDATION', '请求格式无效');
   const reader = request.body?.getReader(); if (!reader) fail('VALIDATION', '请求内容为空');
   const chunks = []; let length = 0;
   while (true) {
     const { done, value } = await reader.read(); if (done) break;
     length += value.byteLength;
-    if (length > 32768) { await reader.cancel(); fail('VALIDATION', '请求内容过长'); }
+    if (length > maximum) { await reader.cancel(); fail('VALIDATION', '请求内容过长'); }
     chunks.push(value);
   }
   const bytes = new Uint8Array(length); let offset = 0;
@@ -59,6 +60,7 @@ export class ClubService extends DurableObject {
     super(ctx, env); this.env = env; this.sql = ctx.storage.sql;
     this.store = createStore(ctx.storage);
     this.booking = createBookingSync(ctx,env,this.store);
+    this.experience = createExperienceService(ctx,env,this.store);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS accounts (
       id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, salt TEXT NOT NULL,
       password_hash TEXT NOT NULL, recovery_hash TEXT NOT NULL, created_at INTEGER NOT NULL
@@ -177,6 +179,32 @@ export class ClubService extends DurableObject {
     return { ...result, currentUser, ...(result.club?{bookingEnabled:this.booking.configured() && result.club.id===this.env.BOOKING_CLUB_ID}:{}) };
   }
   async fetch(request) {
+    const path=new URL(request.url).pathname;
+    if(path==='/experience' || path.startsWith('/experience/')) {
+      try {
+        let data;
+        if(request.method==='POST') {
+          const account=this.authenticate(request);
+          this.limit('experience-write:'+account.id,100,3600000);
+          if(path==='/experience/upload')this.limit('experience-upload:'+account.id,30,3600000);
+          data=await readBody(request,path==='/experience/upload'?14*1024*1024+32768:32768);
+        }
+        return await this.ctx.blockConcurrencyWhile(async()=>{
+          try {
+            if(request.method==='GET' && path==='/experience')return json({ok:true,data:await this.experience.list(request.headers.has('Authorization')?this.authenticate(request):null)});
+            if(request.method==='GET' && /^\/experience\/files\/x_[a-f0-9]{32}$/.test(path))return this.experience.download(path.split('/').at(-1));
+            if(request.method==='POST' && ['/experience/upload','/experience/manage'].includes(path)) {
+              const account=this.authenticate(request);
+              return json({ok:true,data:await this.experience[path.endsWith('/upload')?'upload':'manage'](data,account)});
+            }
+            fail('NOT_FOUND','接口不存在');
+          } catch(error) {
+            if(error instanceof ClubError)return json({ok:false,code:error.code,message:error.message},STATUS[error.code]||400);
+            console.error('Experience request failed',error.name,error.message);return json({ok:false,code:'INTERNAL',message:'档案服务暂时不可用，请稍后再试'},500);
+          }
+        });
+      } catch(error) {return json({ok:false,code:error.code||'VALIDATION',message:error.message},STATUS[error.code]||400);}
+    }
     if (new URL(request.url).pathname==='/integrations/booking') {
       if (!authorized(request,this.env.BOOKING_SYNC_KEY)) return json({error:'Not found'},404);
       return this.ctx.blockConcurrencyWhile(async()=>{
@@ -217,7 +245,8 @@ export default {
       if (!authorized(request,env.BOOKING_SYNC_KEY)) return json({error:'Not found'},404);
       return env.CLUB_SERVICE.get(env.CLUB_SERVICE.idFromName('sps-club-service-v1')).fetch(request);
     }
-    if (request.method !== 'POST' || !['/api', '/auth/register', '/auth/login', '/auth/logout', '/auth/recover'].includes(path)) return Response.json({ ok: false, message: '接口不存在' }, { status: 404, headers });
+    const experienceRoute=!new URL(request.url).search && ((request.method==='GET' && (path==='/experience'||/^\/experience\/files\/x_[a-f0-9]{32}$/.test(path))) || (request.method==='POST' && ['/experience/upload','/experience/manage'].includes(path)));
+    if (!experienceRoute && (request.method !== 'POST' || !['/api', '/auth/register', '/auth/login', '/auth/logout', '/auth/recover'].includes(path))) return Response.json({ ok: false, message: '接口不存在' }, { status: 404, headers });
     const forwarded = new Request(request);
     forwarded.headers.set('X-SPS-IP', hash(clientIp(request, env)));
     const stub = env.CLUB_SERVICE.get(env.CLUB_SERVICE.idFromName('sps-club-service-v1'));

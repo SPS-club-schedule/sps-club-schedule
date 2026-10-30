@@ -13,6 +13,7 @@ export { templates, templateEditor } from './template-views';
 export { admin, adminEditor, resetPassword } from './admin-views';
 export { accountSettings } from './account-views';
 export { archives } from './archive-views';
+export {experience} from './experience';
 const brand = `<div class="brand-mark">SPS</div><div class="eyebrow">BETTER TOGETHER</div><h1 class="h1 space">社团的每一件事，<br>一起完成。</h1><p class="muted space">安排任务，约定时间，让每一份参与都有回应。</p>`;
 const parentLink = t => t.parentTaskId ? link('/task?id='+encodeURIComponent(t.parentTaskId),'↳ '+e(t.parentTitle),'parent-task-link small') : '';
 function subtasks(t, b, s) {
@@ -32,7 +33,7 @@ export function auth(s) {
     ${register ? `${field('nickname','你在社团里的称呼',f.nickname,'text','required maxlength="20" autocomplete="nickname"')}<div class="chips field">${button('joinMode','加入已有社团','chip '+(s.joinMode==='join'?'active':''),'data-value="join"')}${button('joinMode','创建社团','chip '+(s.joinMode==='create'?'active':''),'data-value="create"')}</div>${s.joinMode==='join'?field('invite','社团邀请码',f.invite,'text','required maxlength="64" autocomplete="off" placeholder="粘贴管理员发来的邀请码"'):field('name','社团名称',f.name||'SPS 社团日程','text','required maxlength="30"')}` : ''}
     ${error(s)}<button class="primary full" type="submit" ${busy(s)}>${s.busy?'正在处理…':recover?'重设密码':register?'创建账号，开始协作 →':'登录，继续协作 →'}</button>
     ${!register ? button('authMode',recover?'返回登录':'忘记密码？用恢复码找回','plain small space',`data-value="${recover?'login':'recover'}"`) : '<p class="hint">使用部门邀请码会自动归入对应部门。社团成员可以看到彼此的称呼、部门、任务及完成情况。</p>'}
-  </form></section>`;
+  </form><p class="space center">${link('/experience','公开浏览 SPS 经验档案 →','plain small')}</p></section>`;
 }
 export function entry(s) {
   const f = s.form;

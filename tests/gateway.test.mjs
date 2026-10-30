@@ -51,3 +51,11 @@ test('gateway handles upstream redirects, HTML errors and network failures witho
     assert.equal((await response.json()).ok, false);
   }
 });
+
+test('gateway exposes only valid archive routes and serves verified downloads as attachments',async()=>{
+  const id='x_'+'a'.repeat(32),env={GATEWAY_SIGNING_KEY:secret};
+  globalThis.fetch=async(url,options)=>{assert.equal(url,'https://sps-club-api.sysu-physics-clubs.workers.dev/experience/files/'+id);assert.equal(options.method,'GET');return new Response(new Uint8Array([0,255,12]),{headers:{'Content-Type':'application/octet-stream','Content-Disposition':"attachment; filename*=UTF-8''test.pdf",'Set-Cookie':'bad=1'}});};
+  const response=await gateway.fetch(request('/experience/files/'+id),env);assert.equal(response.status,200);assert.equal(response.headers.get('Set-Cookie'),null);assert.match(response.headers.get('Content-Disposition'),/^attachment/);assert.match(response.headers.get('Content-Security-Policy'),/sandbox/);assert.deepEqual([...new Uint8Array(await response.arrayBuffer())],[0,255,12]);
+  globalThis.fetch=()=>{throw new Error('Unexpected upstream');};
+  for(const path of ['/experience/files/no','/experience/files/'+id+'?url=https://evil.test','/experience/other'])assert.equal((await gateway.fetch(request(path),env)).status,404);
+});
