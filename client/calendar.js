@@ -1,16 +1,20 @@
 import { deadlineCalendar } from '../shared/calendar';
 import { parts, hasDuration, durationLabel } from '../shared/view';
 import { bookingPage } from './booking';
+import {compactTasks,selectedScope} from '../shared/planner';
+import {departmentLabel} from '../shared/departments';
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const dateLabel = date => `${Number(date.slice(5, 7))}月${Number(date.slice(8))}日`;
 
-export function calendar(tasks, state, mine, now, booking={}) {
-  const c = deadlineCalendar(tasks, { ...state, mine, now,activities:booking.activities || [] });
+export function calendar(tasks, state, mine, now, booking={},board,settings={}) {
+  const scope=board?selectedScope(board.me,settings.scope):null;
+  if(board)tasks=compactTasks(board,scope,now);
+  const c = deadlineCalendar(tasks, { ...state, mine:board?false:mine, now,activities:booking.activities || [] });
   const monthLabel = `${c.month.slice(0, 4)}年${Number(c.month.slice(5))}月`;
   return `<section class="card deadline-calendar section" aria-labelledby="calendar-heading">
-    <div class="row between"><h2 class="h2" id="calendar-heading">任务日历</h2><span class="calendar-total">${c.total} 项待完成</span></div>
-    <p class="calendar-hint">${mine ? '我的未完成任务' : '社团未完成任务'}与其他社团活动 · 北京时间</p>
+    <div class="row between"><h2 class="h2" id="calendar-heading">任务日历</h2><a class="secondary compact" href="#/calendar" aria-label="打开大日历">展开日历 ↗</a></div>
+    <p class="calendar-hint">${board?(scope.startsWith('department:')?departmentLabel(scope.slice(11))+'截止事项':{mine:'我的截止事项',department:'本部门截止事项',club:'全社团截止事项'}[scope]):mine ? '我的未完成任务' : '社团未完成任务'}与社团活动 · 北京时间</p>
     <div class="row between space"><button type="button" class="secondary compact" data-action="exportCalendar">导出我的日程 .ics</button><a class="plain small" href="${bookingPage}" target="_blank" rel="noopener noreferrer">预约总览 ↗</a></div>
     <p class="hint space">导出我负责的未结束活动与待办截止事项。文件是当前快照，任务变化后需重新导出。</p>
     <div class="row between calendar-toolbar">
@@ -34,7 +38,7 @@ export function calendar(tasks, state, mine, now, booking={}) {
         if(task.external)return `<li><a class="calendar-task external-activity" href="${bookingPage}" target="_blank" rel="noopener noreferrer"><span class="calendar-task-time duration-tag">社团<br>活动</span><span class="calendar-task-title"><small class="external-club">${escape(task.club)}</small>${escape(task.title)}<small class="calendar-duration-label">${escape(durationLabel(task))}</small><small class="calendar-parent">地点：${escape(task.location || '未定')}</small></span><span class="calendar-task-arrow">↗</span></a></li>`;
         const p = parts(task.dueAt), duration=hasDuration(task);
         const time=duration?'<span class="calendar-task-time duration-tag">持续<br>时段</span>':`<time class="calendar-task-time" datetime="${p.date}T${p.time}:00+08:00">${c.selected ? '' : `<span>${dateLabel(p.date)}</span>`}<span>${p.time}</span></time>`;
-        return `<li><a class="calendar-task" href="#/task?id=${encodeURIComponent(task._id)}">${time}<span class="calendar-task-title">${escape(task.title)}${duration?`<small class="calendar-duration-label">${escape(durationLabel(task))}</small><small class="calendar-parent">地点：${escape(task.location || '未定')} · 截止：${dateLabel(p.date)} ${p.time}</small>`:''}${task.parentTaskId?`<small class="calendar-parent">${escape(task.parentTitle)}</small>`:''}</span>${task.status === 'overdue' ? '<span class="pill overdue">已逾期</span>' : task.priority === 'high' ? '<span class="pill high">优先</span>' : '<span class="calendar-task-arrow" aria-hidden="true">↗</span>'}</a></li>`;
+        return `<li><a class="calendar-task" href="#/task?id=${encodeURIComponent(task._id)}">${time}<span class="calendar-task-title">${escape(task.title)}${duration?`<small class="calendar-duration-label">${escape(durationLabel(task))}</small><small class="calendar-parent">地点：${escape(task.location || '未定')}${task.calendarDeadlineVisible!==false?` · 截止：${dateLabel(p.date)} ${p.time}`:''}</small>`:''}${task.parentTaskId?`<small class="calendar-parent">${escape(task.parentTitle)}</small>`:''}</span>${task.status === 'overdue' && task.calendarDeadlineVisible!==false ? '<span class="pill overdue">已逾期</span>' : task.priority === 'high' ? '<span class="pill high">优先</span>' : '<span class="calendar-task-arrow" aria-hidden="true">↗</span>'}</a></li>`;
       }).join('')}</ul>` : `<p class="calendar-empty">${!c.total ? '暂无待完成任务，给自己一个小小的鼓励。' : c.selected ? '这一天没有待完成任务安排。' : '本月没有待完成任务安排，可切换月份查看。'}</p>`}
     </div>
   </section>`;

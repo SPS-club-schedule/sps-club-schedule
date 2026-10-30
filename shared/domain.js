@@ -18,6 +18,7 @@ function text(value, label, max, optional) {
   return clean;
 }
 const safeMember = m => m.archived ? { id: m._id, archived: true, syncVersion: m.syncVersion } : ({ id: m._id, name: m.name, role: m.role, department: m.department || '', joinedAt: m.joinedAt, syncVersion: m.syncVersion || 0 });
+const publicMember = (m, viewer) => ({...safeMember(m), ...(!m.archived && m._id!==viewer._id ? {role:isAdmin(m.role)?'admin':'member'} : {})});
 // Older memberships have no archived field. Only explicit tombstones are removed.
 const activeMembers = async (db, fields) => (await db.find('members', fields)).filter(m => !m.archived);
 const safeClub = c => ({ id: c._id, name: c.name, inviteVersion: c.inviteVersion || 0 });
@@ -138,7 +139,7 @@ function createService({ store, now, randomId, hash }) {
     ]);
     return {
       full: true, version, club: safeClub(club), me: safeMember(members.find(m => m._id === me._id) || me),
-      members: members.map(safeMember).sort((a, b) => a.joinedAt - b.joinedAt),
+      members: members.map(m=>publicMember(m,me)).sort((a, b) => a.joinedAt - b.joinedAt),
       tasks: tasks.sort((a, b) => a.dueAt - b.dueAt), templates
     };
   }
@@ -174,7 +175,7 @@ function createService({ store, now, randomId, hash }) {
       // Tabs opened before member deletion shipped cannot merge tombstones.
       if (input.memberTombstones !== true && members.some(m => m.archived)) return snapshot(club, me);
       // Archived documents (including members) are tombstones needed by deltas.
-      return { full: false, version, club: safeClub(club), me: safeMember(members.find(m => m._id === me._id) || me), members: members.map(safeMember), tasks, templates };
+      return { full: false, version, club: safeClub(club), me: safeMember(members.find(m => m._id === me._id) || me), members: members.map(m=>publicMember(m,me)), tasks, templates };
     },
     async createClub(input, identity) {
       const name = text(input.name, '社团名称', 30);

@@ -11,7 +11,7 @@ if (api.username || api.password || api.search || api.hash || api.pathname !== '
 if (process.env.CI && !process.env.API_BASE_URL) throw new Error('Set the GitHub repository variable API_BASE_URL before deployment');
 await fs.mkdir(path.join(root,'dist/assets'), { recursive:true });
 await build({ entryPoints:[path.join(root,'client/app.js')], outfile:path.join(root,'dist/assets/app.js'), bundle:true, minify:true, platform:'browser', target:'es2020' });
-const css = await Promise.all(['style.css','web.css'].map(name=>fs.readFile(path.join(root,'client',name),'utf8')));
+const css = await Promise.all(['style.css','web.css','workspace.css'].map(name=>fs.readFile(path.join(root,'client',name),'utf8')));
 await fs.writeFile(path.join(root,'dist/assets/app.css'),css.join('\n'));
 const csp = `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ${api.origin} ${bookingApi.origin}; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'`;
 const html=(await fs.readFile(path.join(root,'client/index.html'),'utf8')).replace('__CSP__',csp);

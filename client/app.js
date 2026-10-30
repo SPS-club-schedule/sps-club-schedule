@@ -10,7 +10,11 @@ import { scheduleDraft, enableDuration, followStart, followDuration, applyTempla
 import { templateDurationForm, templateDurationValue } from '../shared/template-duration';
 import {personalCalendar} from '../shared/ical';
 import {configureBooking,otherActivities} from './booking';
+import {workspace} from './workspace';
+import {shiftDate,selectedScope} from '../shared/planner';
 const root = document.getElementById('app');
+const desktop=window.matchMedia('(min-width: 1000px)');
+const workspaceUi={calendarOpen:false,context:'board',clubId:'',planner:{date:parts(Date.now()).date,mode:desktop.matches?'week':'day',showDeadlines:true}};
 let stop = null, generation = 0, inviteKey = '', adminLoad = 0;
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
 function go(path) { if (location.hash === '#' + path) route(); else location.hash = path; }
@@ -18,12 +22,19 @@ function render() {
   const active = document.activeElement, name = active?.getAttribute('name');
   const start = active?.selectionStart, end = active?.selectionEnd;
   const calendarFocus = active?.matches('.deadline-calendar button') ? { action: active.dataset.action, value: active.dataset.value } : null;
-  const calendarLink = active?.matches('.calendar-task') ? active.getAttribute('href') : null;
+  const calendarLink = active?.matches('.calendar-task,.time-block,.deadline-line') ? active.getAttribute('href') : null;
+  const panelFocus=active?.closest('.planner') && active.dataset.action?{action:active.dataset.action,value:active.dataset.value}:null;
+  const regionScroll=new Map(Array.from(root.querySelectorAll('[data-scroll-key]')).map(el=>[el.dataset.scrollKey,[el.scrollTop,el.scrollLeft]]));
+  const plannerScroll=root.querySelector('.planner-scroll');
+  const plannerPosition=plannerScroll?[plannerScroll.scrollTop,plannerScroll.scrollLeft]:null;
   const agendaScroll = root.querySelector('.calendar-agenda-list')?.scrollTop;
   const agendaFocus = active?.matches('.calendar-agenda-list');
   const scroll = window.scrollY;
-  const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, 'admin-archives':views.archives, reset:views.resetPassword, account:views.accountSettings }[s.page] || views.auth)(s);
-  root.innerHTML = html;
+  const html = ['board','mine','calendar'].includes(s.page) ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, 'admin-archives':views.archives, reset:views.resetPassword, account:views.accountSettings }[s.page] || views.auth)(s);
+  root.innerHTML = workspace(s,html,workspaceUi);
+  const editorPage=root.querySelector('.editor-pane .page');if(editorPage)editorPage.dataset.scrollKey=s.page+'-'+(s.id||'new');
+  for(const el of root.querySelectorAll('[data-scroll-key]')){const pos=regionScroll.get(el.dataset.scrollKey);if(pos){el.scrollTop=pos[0];el.scrollLeft=pos[1];}}
+  const grid=root.querySelector('.planner-scroll');if(grid){grid.scrollTop=plannerPosition?.[0]??480;grid.scrollLeft=plannerPosition?.[1]||0;}
   if (name) {
     const next = root.querySelector(`[name="${CSS.escape(name)}"]`);
     if (next) { next.focus({ preventScroll: true }); if (start != null) next.setSelectionRange(start, end); }
@@ -33,9 +44,10 @@ function render() {
     (next || root.querySelector('[data-action="calendarToday"]'))?.focus({ preventScroll: true });
   }
   if (calendarLink) {
-    const next = Array.from(root.querySelectorAll('.calendar-task')).find(el => el.getAttribute('href') === calendarLink);
+    const next = Array.from(root.querySelectorAll('.calendar-task,.time-block,.deadline-line')).find(el => el.getAttribute('href') === calendarLink);
     (next || root.querySelector('[data-action="calendarToday"]'))?.focus({ preventScroll: true });
   }
+  if(panelFocus)Array.from(root.querySelectorAll('.planner [data-action]')).find(el=>el.dataset.action===panelFocus.action&&el.dataset.value===panelFocus.value)?.focus({preventScroll:true});
   const agenda = root.querySelector('.calendar-agenda-list');
   if (agenda) { agenda.scrollTop = agendaScroll || 0; if (agendaFocus) agenda.focus({ preventScroll: true }); }
   window.scrollTo(0, scroll);
@@ -93,9 +105,13 @@ async function loadAdmin() {
 }
 function receive(state) {
   s.sync = state;
-  if (['board','mine'].includes(s.page) && state.phase==='ready' && state.board?.club && !s.bookingLoading && Date.now()-(s.bookingCheckedAt || 0)>30000) loadBooking();
+  if(state.board?.club && workspaceUi.clubId!==state.board.club.id){workspaceUi.clubId=state.board.club.id;workspaceUi.planner.scope=undefined;s.booking=undefined;s.bookingCheckedAt=0;}
+  const accessKey=state.board?.me?[state.board.club?.id,state.board.me.id,state.board.me.role,state.board.me.department].join(':'):'';
+  if(workspaceUi.accessKey!==accessKey){workspaceUi.accessKey=accessKey;workspaceUi.planner.scope=undefined;if(adminPage())clearAdmin();}
+  if(state.board?.me)workspaceUi.planner.scope=selectedScope(state.board.me,workspaceUi.planner.scope);
+  if ((['board','mine','calendar'].includes(s.page)||workspaceUi.calendarOpen) && state.phase==='ready' && state.board?.club && !s.bookingLoading && Date.now()-(s.bookingCheckedAt || 0)>30000) loadBooking();
   if (s.page==='templates' && s.category && state.board && !(state.board.templates || []).some(t=>t.category===s.category)) s.category='';
-  if (state.board && !state.board.club && ['board','mine','task','members','templates','admin','admin-edit','admin-archives'].includes(s.page)) { go('/entry'); return; }
+  if (state.board && !state.board.club && ['board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(s.page)) { go('/entry'); return; }
   if (state.board?.club && !api.clubId()) api.setClub(state.board.club.id);
   if (adminPage()) {
     if (!isAdmin(state.board?.me?.role)) clearAdmin();
@@ -131,14 +147,17 @@ async function route() {
   const page = url.pathname.slice(1), invitation = url.searchParams.get('invite');
   if (!api.user() && !['auth','reset'].includes(page)) { go('/auth'); return; }
   if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : '/board'); return; }
-  s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId() };
+  if(['board','mine','templates'].includes(page))workspaceUi.context=page;
+  if(page==='calendar')workspaceUi.calendarOpen=true;
+  if(['auth','entry','reset'].includes(page)){workspaceUi.calendarOpen=false;workspaceUi.planner.scope=undefined;}
+  s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId(),plannerSettings:workspaceUi.planner,booking:s.booking,bookingCheckedAt:s.bookingCheckedAt };
   if (page==='reset') {
     s.resetToken=url.searchParams.get('token') || ''; s.form={username:url.searchParams.get('username') || ''};
     // Keep the bearer secret out of the URL after reading the reset link.
     history.replaceState(null,'','#/reset');
   }
   inviteKey = ''; window.scrollTo(0,0); render();
-  if (['board','mine','task','members','templates','admin','admin-edit','admin-archives'].includes(page)) { stop = api.sync.watch(receive); return; }
+  if (['board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(page)) { stop = api.sync.watch(receive); return; }
   if (page === 'auth' || page==='reset') return;
   try {
     if (page==='account') { await loadAccount(); if(ticket===generation) render(); return; }
@@ -175,6 +194,7 @@ async function route() {
       s.editBoard = b;
     }
     render();
+    if(['edit','template-edit'].includes(page))stop=api.sync.watch(receive);
   } catch (error) { if (ticket === generation) { s.error = error.message; render(); } }
 }
 function applyTemplate() {
@@ -214,6 +234,12 @@ function inputChanged(event) {
   if (s.busy) return;
   const { name, value } = event.target;
   if (!name) return;
+  if(name.startsWith('planner')) {
+    if(name==='plannerDate'&&value)workspaceUi.planner.date=value;
+    if(name==='plannerScope')workspaceUi.planner.scope=selectedScope(s.sync.board?.me,value);
+    if(name==='plannerDeadlines')workspaceUi.planner.showDeadlines=event.target.checked;
+    if(event.type==='change')render();return;
+  }
   const {step,field}=event.target.dataset;
   if (step!==undefined) {
     if (!s.steps[Number(step)]) return;
@@ -223,7 +249,7 @@ function inputChanged(event) {
   } else if (name==='selectedTemplate') s.selectedTemplate=value;
   else if (name==='inviteDepartment') { s.inviteDepartment=value; render(); }
   else if (name==='templateCategory') { s.category=value; render(); }
-  else if (name === 'search') { s.search = value; api.sync.touch(); render(); }
+  else if (name === 'search') { if(['edit','template-edit','calendar'].includes(s.page))s.contextSearch=value;else s.search = value; api.sync.touch(); render(); }
   else { changeScheduleField(s.form,name,value); if(event.type==='change'&&['date','time','startDate','startTime','endDate','endTime'].includes(name)) render(); }
 }
 root.addEventListener('input', inputChanged);
@@ -289,6 +315,11 @@ root.addEventListener('click', event => {
   const el = event.target.closest('[data-action]'); if (!el || el.disabled) return;
   const { action, value, id } = el.dataset;
   if (s.busy) return;
+  if(action==='closePlanner'){workspaceUi.calendarOpen=false;if(s.page==='calendar')go('/'+(workspaceUi.context==='mine'?'mine':'board'));else render();return;}
+  if(action==='plannerMove'){workspaceUi.planner.date=shiftDate(workspaceUi.planner.date,Number(value)*(workspaceUi.planner.mode==='day'?1:7));render();return;}
+  if(action==='plannerToday'){workspaceUi.planner.date=parts(Date.now()).date;render();return;}
+  if(action==='plannerMode'){workspaceUi.planner.mode=value==='day'?'day':'week';render();return;}
+  if(action==='plannerDay'){workspaceUi.planner.date=value;workspaceUi.planner.mode='day';render();return;}
   if (action==='duration') { enableDuration(s.form,value==='true'); render(); return; }
   if (action==='templateDuration') { s.form.templateHasDuration=value==='true'; render(); return; }
   if (action==='followDuration') { perform(async()=>followDuration(s.form)); return; }
@@ -330,7 +361,7 @@ root.addEventListener('click', event => {
   }
   if (action === 'authMode') { s.authMode = value; s.error = ''; render(); return; }
   if (action === 'joinMode') { s.joinMode = value; s.error = ''; render(); return; }
-  if (action === 'filter') { s.filter = value; api.sync.touch(); render(); return; }
+  if (action === 'filter') { if(['edit','template-edit','calendar'].includes(s.page))s.contextFilter=value;else s.filter = value; api.sync.touch(); render(); return; }
   if (action.startsWith('calendar')) {
     const today = parts(Date.now()).date;
     s.calendar ||= { month: today.slice(0,7), date: '' };
@@ -422,7 +453,7 @@ window.addEventListener('online', () => api.sync.setOnline(true));
 window.addEventListener('offline', () => api.sync.setOnline(false));
 document.addEventListener('visibilitychange', () => api.sync.setVisible(!document.hidden));
 // Deadline labels use local time and never initiate a request.
-setInterval(() => { if (!document.hidden && ['board','mine','task'].includes(s.page)) render(); },30000);
+setInterval(() => { if (!document.hidden && ['board','mine','calendar','task'].includes(s.page)) render(); },30000);
 async function start() {
   try {
     const response = await fetch(new URL('./config.json', location.href.split('#')[0]), { cache:'no-store' });

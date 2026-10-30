@@ -3,7 +3,7 @@ import domain from '../shared/domain.js';
 import departments from '../shared/departments.js';
 import { listArchives, restoreArchive } from './archive.mjs';
 const { validDepartment } = departments;
-const { isAdmin, canEditMember, canDeleteMember } = permissions;
+const { ROLES, isAdmin, canEditMember, canDeleteMember, canEditProfile, canEditDepartment, canAssignRole, assignableRoles, canEditLogin, canViewAudit } = permissions;
 const { ClubError, safeMember, safeClub, activeMembers } = domain;
 const fail = (code, message) => { throw new ClubError(code, message); };
 export const accountRevision = (sql, id) => sql.exec('SELECT revision FROM account_versions WHERE account_id=?', id).toArray()[0]?.revision || 1;
@@ -30,7 +30,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     return actor;
   }
   async function accountAccess(db, actor, target) {
-    if (!canEditMember(safeMember(actor), safeMember(target))) return '仅创建者可以管理其他管理员的账号';
+    if (!canEditMember(safeMember(actor), safeMember(target))) return '只能管理权限低于自己且属于管理范围的成员';
     // A club-scoped privilege must not become access to an unrelated club.
     if (actor.identity !== target.identity && (await activeMembers(db, { identity: target.identity })).some(m => m.clubId !== target.clubId)) return '该账号已加入其他社团，登录信息须由本人维护';
     return '';
@@ -38,7 +38,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
   async function deleteAccess(db, actor, target, account) {
     if (target.role === 'owner') return '不能删除社团创建者的账号';
     if (actor._id === target._id) return '不能在成员管理中删除自己的账号';
-    if (!canDeleteMember(safeMember(actor), safeMember(target))) return '仅创建者可以删除管理员账号';
+    if (!canDeleteMember(safeMember(actor), safeMember(target))) return '只能删除管理范围内的下级成员账号';
     if (!account) return '此成员没有网页账号';
     if (await accountAccess(db, actor, target)) return '该账号已加入其他社团，不能在本社团删除';
     return '';
@@ -49,7 +49,10 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     const deleteAccountRestriction = await deleteAccess(db, actor, target, account);
     return { ...safeMember(target), username: account?.username || '', accountCreatedAt: account?.created_at || null,
       accountRevision: account ? accountRevision(sql,target.identity) : 0, canEdit: canEditMember(safeMember(actor), safeMember(target)),
-      canEditAccount: !accountRestriction, accountRestriction, canDeleteAccount: !deleteAccountRestriction, deleteAccountRestriction };
+      canEditProfile:canEditProfile(safeMember(actor),safeMember(target)), canEditDepartment:canEditDepartment(safeMember(actor),safeMember(target)),
+      assignableRoles:assignableRoles(safeMember(actor),safeMember(target)),
+      canEditAccount: !accountRestriction && canEditLogin(safeMember(actor),safeMember(target)), canResetPassword:!accountRestriction,
+      accountRestriction:accountRestriction || (!canEditLogin(safeMember(actor),safeMember(target))?'登录用户名由网页维护管理或本人修改':''), canDeleteAccount: !deleteAccountRestriction, deleteAccountRestriction };
   }
   function audit(clubId, actor, target, action, fields) {
     sql.exec('INSERT INTO admin_audit(club_id,actor_member_id,target_member_id,action,fields,created_at) VALUES(?,?,?,?,?,?)',
@@ -61,14 +64,15 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     if (['adminRestoreTask','adminRestoreTemplate'].includes(action)) return restoreArchive(db,action,input,actor,now());
     if (action === 'adminMembers') {
       const members = await activeMembers(db, { clubId: input.clubId });
-      const events = sql.exec('SELECT actor_member_id,target_member_id,action,fields,created_at FROM admin_audit WHERE club_id=? ORDER BY id DESC LIMIT 30', input.clubId).toArray();
-      return { me: safeMember(actor), members: await Promise.all(members.sort((a,b) => a.joinedAt-b.joinedAt).map(m => entry(db, actor, m))),
+      const events = canViewAudit(actor.role) ? sql.exec('SELECT actor_member_id,target_member_id,action,fields,created_at FROM admin_audit WHERE club_id=? ORDER BY id DESC LIMIT 30', input.clubId).toArray() : [];
+      const visible=actor.role==='department_admin'?members.filter(m=>m._id===actor._id || m.department===actor.department && !!actor.department):members;
+      return { me: safeMember(actor), canViewAudit:canViewAudit(actor.role), members: await Promise.all(visible.sort((a,b) => a.joinedAt-b.joinedAt).map(m => entry(db, actor, m))),
         events: events.map(r => ({ actorId:r.actor_member_id, targetId:r.target_member_id, action:r.action, fields:JSON.parse(r.fields), at:r.created_at })) };
     }
     if (!['adminEditMember','adminResetPassword','adminDeleteAccount'].includes(action)) fail('VALIDATION', '不支持的管理操作');
     const target = await db.get('members', input.memberId);
     if (!target || target.archived || target.clubId !== input.clubId) fail('NOT_FOUND', '本社团中没有这位成员');
-    if (!canEditMember(safeMember(actor), safeMember(target))) fail('FORBIDDEN', '仅创建者可以管理其他管理员');
+    if (!canEditMember(safeMember(actor), safeMember(target))) fail('FORBIDDEN', '只能管理权限低于自己且属于管理范围的成员');
     if (input.memberVersion !== (target.syncVersion || 0)) fail('CONFLICT', '成员资料已更新，请返回管理页后重新编辑');
     const account = sql.exec('SELECT * FROM accounts WHERE id=?', target.identity).toArray()[0];
     if (input.accountRevision !== (account ? accountRevision(sql,target.identity) : 0)) fail('CONFLICT', '账号资料已更新，请返回管理页后重新编辑');
@@ -104,12 +108,16 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     // An older client omitting this field must preserve the current assignment.
     const department = input.department === undefined ? target.department || '' : input.department;
     if (!validDepartment(department)) fail('VALIDATION', '请选择有效的部门');
-    if (!['owner','admin','member'].includes(role)) fail('VALIDATION', '请选择有效的成员角色');
+    if (!ROLES.includes(role)) fail('VALIDATION', '请选择有效的成员角色');
     if ((target.role === 'owner' && role !== 'owner') || (target.role !== 'owner' && role === 'owner')) fail('FORBIDDEN', '创建者身份不能在此修改');
-    if (role !== target.role && actor.role !== 'owner') fail('FORBIDDEN', '仅创建者可以任免管理员');
+    if (role !== target.role && !canAssignRole(safeMember(actor),safeMember(target),role)) fail('FORBIDDEN', '只能任免权限低于自己的管理员');
+    if (role==='department_admin' && !department) fail('VALIDATION', '请为部门管理指定所属部门');
+    if (name!==target.name && !canEditProfile(safeMember(actor),safeMember(target))) fail('FORBIDDEN','网页维护管理不能修改他人的社团称呼');
+    if (department!==(target.department || '') && !canEditDepartment(safeMember(actor),safeMember(target))) fail('FORBIDDEN','仅总管理员或创始人可以调整所属部门');
     const login = input.username === undefined ? account?.username : username(input.username);
     const loginChanged = login !== account?.username;
     if (loginChanged) {
+      if (!canEditLogin(safeMember(actor),safeMember(target))) fail('FORBIDDEN','登录用户名由网页维护管理或本人修改');
       const restriction = await accountAccess(db, actor, target);
       if (!account || restriction) fail('FORBIDDEN', restriction || '此成员没有网页账号');
       if (sql.exec('SELECT id FROM accounts WHERE username=? AND id<>?', login, target.identity).toArray().length) fail('CONFLICT', '这个用户名已被使用');
@@ -124,7 +132,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
       sql.exec('DELETE FROM account_resets WHERE account_id=?', target.identity);
     }
     // Demotion cancels every outstanding reset issued with these privileges.
-    if (role !== target.role) sql.exec('DELETE FROM account_resets WHERE club_id=? AND (actor_identity=? OR account_id=?)', input.clubId, target.identity, target.identity);
+    if (role !== target.role || department !== (target.department || '')) sql.exec('DELETE FROM account_resets WHERE club_id=? AND (actor_identity=? OR account_id=?)', input.clubId, target.identity, target.identity);
     const version = baseVersion + 1, updated = { ...target, name, role, department, syncVersion:version };
     const updatedClub = { ...club, syncVersion:version, membersVersion:version };
     await db.put('members', target._id, updated); await db.put('clubs', club._id, updatedClub);

@@ -231,7 +231,7 @@ test('reset links are single-use, rotated, persisted, reauthenticated and revoke
   assert.equal(listed.events.filter(e=>e.action==='reset').length,2);
 });
 
-test('club admins cannot take over accounts in other clubs; account edits remain available to the account owner',async()=>{
+test('club admins cannot take over accounts in other clubs or manage themselves through the admin endpoint',async()=>{
   const f=await adminFixture('multi');
   await api('createClub',{name:'Another club',nickname:'Other owner',requestId:'multi-other-club'},f.member.token);
   const target=await f.row(f.member);
@@ -244,7 +244,7 @@ test('club admins cannot take over accounts in other clubs; account edits remain
   const own=await api('adminMembers',{},f.member.token).catch(()=>null);assert.equal(own,null);
   const clubs=(await api('bootstrap',{},f.member.token)).clubs;
   const other=clubs.find(c=>c.id!==f.clubId),self=(await api('adminMembers',{clubId:other.id},f.member.token)).members[0];
-  assert.equal(self.canEditAccount,true);
+  assert.equal(self.canEditAccount,false); // Self-service uses the separate account settings API.
 });
 
 test('demotion cancels pending reset links and joining a different club invalidates earlier account authority',async()=>{
@@ -311,6 +311,46 @@ test('department registration, joining, admin edits, authorization, rotation and
   const roster=(await api('bootstrap',{clubId:f.clubId},f.member.token)).members;
   assert.equal(roster.find(m=>m.id===target.id).department,'liaison');
   assert.equal(roster.find(m=>m.id===cleared.member.id).department,'');
+});
+
+test('separate management roles enforce hierarchy, department boundaries, audit access and public role privacy',async()=>{
+  async function scopedRegister(username,mode,invite) {
+    const time=String(Date.now()),ip='192.0.2.77';
+    const signature=createHmac('sha256','test-gateway-secret').update(`${time}\n${ip}`).digest('hex');
+    const response=await mf.dispatchFetch('http://localhost/auth/register',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://site.test','X-SPS-Gateway-IP':ip,'X-SPS-Gateway-Time':time,'X-SPS-Gateway-Signature':signature},body:JSON.stringify({username,password,nickname:username,mode,invite,name:'Scoped roles'})});
+    const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));return result.data;
+  }
+  const creator=await scopedRegister('scoped_owner','create'),clubId=creator.clubId;
+  const invitation=(await api('getInvite',{clubId},creator.token)).token;
+  const list=()=>api('adminMembers',{clubId},creator.token);
+  const f={creator,clubId,list,row:async account=>(await list()).members.find(m=>m.username===account.user.username),input:target=>({clubId,memberId:target.id,memberVersion:target.syncVersion,accountRevision:target.accountRevision,name:target.name,role:target.role,username:target.username,adminPassword:password})};
+  const dept=await scopedRegister('scoped_member','join',invitation),web=await scopedRegister('scoped_web','join',invitation);
+  const general=await scopedRegister('scoped_general','join',invitation),local=await scopedRegister('scoped_local','join',invitation),foreign=await scopedRegister('scoped_foreign','join',invitation);
+  const configure=async(user,role,department='')=>api('adminEditMember',{...f.input(await f.row(user)),role,department},f.creator.token);
+  await configure(dept,'department_admin','academic');await configure(web,'web_admin');await configure(general,'admin');
+  await configure(local,'member','academic');await configure(foreign,'member','publicity');
+  let row=await f.row(local);
+  const deptList=await api('adminMembers',{clubId:f.clubId},dept.token);
+  assert.equal(deptList.canViewAudit,false);assert.deepEqual(deptList.events,[]);
+  const foreignId=(await f.row(foreign)).id;assert.ok(!deptList.members.some(m=>m.id===foreignId));
+  assert.equal(deptList.members.length,2);
+  const localEntry=deptList.members.find(m=>m.id===row.id);
+  assert.equal(localEntry.canResetPassword,true);assert.equal(localEntry.canEditAccount,false);assert.equal(localEntry.canEditDepartment,false);
+  await api('adminEditMember',{...f.input(row),name:'部门内称呼'},dept.token);
+  row=await f.row(local);
+  for(const [user,patch,token] of [[local,{username:'dept_cannot_rename'},dept.token],[local,{department:'publicity'},dept.token],[foreign,{name:'禁止跨部门'},dept.token],[web,{name:'禁止管理另一类管理员'},dept.token],[dept,{name:'禁止同级管理'},web.token],[local,{name:'网页管理不能改称呼'},web.token],[local,{role:'admin'},general.token]]){
+    assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(await f.row(user)),...patch}},token)).status,403);
+  }
+  await api('adminEditMember',{...f.input(row),username:'scoped_new_login'},web.token);local.user.username='scoped_new_login';
+  const reset=await api('adminResetPassword',f.input(await f.row(local)),dept.token);
+  await configure(local,'member','publicity');
+  assert.equal((await post('/auth/recover',{username:'scoped_new_login',password,resetToken:reset.resetToken})).status,401);
+  const webList=await api('adminMembers',{clubId:f.clubId},web.token);assert.equal(webList.canViewAudit,true);assert.ok(webList.events.length);
+  await api('adminEditMember',{...f.input(await f.row(foreign)),role:'department_admin'},general.token);
+  const publicBoard=await api('bootstrap',{clubId:f.clubId},local.token);
+  assert.ok(publicBoard.members.every(m=>['member','admin'].includes(m.role)));
+  assert.equal(publicBoard.me.role,'member');
+  const ownBoard=await api('bootstrap',{clubId:f.clubId},dept.token);assert.equal(ownBoard.me.role,'department_admin');
 });
 
 test('department template rules and following assignees persist through the actual Worker and SQLite restart',async()=>{
