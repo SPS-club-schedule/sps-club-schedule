@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import domain from '../shared/domain.js';
 import { createStore } from './store.mjs';
+import { createAdminService, bumpAccountRevision } from './admin.mjs';
 const { createService, ClubError } = domain;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const random = () => randomBytes(32).toString('hex');
@@ -64,6 +65,11 @@ export class ClubService extends DurableObject {
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
     CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);`);
     this.run = createService({ store: this.store, now: Date.now, hash, randomId: () => randomBytes(16).toString('hex') });
+    this.admin = createAdminService({ store:this.store, sql:this.sql, hash, random, username, verifyPassword:(id,pass) => {
+      const row = this.sql.exec('SELECT salt,password_hash FROM accounts WHERE id=?', id).toArray()[0];
+      if (typeof pass !== 'string' || pass.length < 10 || pass.length > 128 || !row || !equal(passwordHash(pass,row.salt),row.password_hash)) fail('FORBIDDEN', '请输入你自己的正确密码以确认操作');
+      this.sql.exec('DELETE FROM rate_limits WHERE key=?', 'admin-password:' + id);
+    } });
   }
   limit(key, maximum, window) {
     const now = Date.now();
@@ -103,7 +109,7 @@ export class ClubService extends DurableObject {
       const digest = passwordHash(pass, salt);
       // Account, membership, club and session commit or roll back together.
       return this.store.transaction(async () => {
-        this.sql.exec('INSERT INTO accounts VALUES(?,?,?,?,?,?)', account.id, name, salt, digest, hash(recoveryCode), Date.now());
+        this.sql.exec('INSERT INTO accounts(id,username,salt,password_hash,recovery_hash,created_at) VALUES(?,?,?,?,?,?)', account.id, name, salt, digest, hash(recoveryCode), Date.now());
         const result = await this.run(data.mode === 'create' ? 'createClub' : 'joinClub', {
           nickname: data.nickname, name: data.name, token: data.invite,
           requestId: 'register_' + account.id
@@ -124,11 +130,17 @@ export class ClubService extends DurableObject {
       const name = username(data.username); password(data.password);
       this.limit('recover:' + name, 5, 15 * 60000);
       const row = this.sql.exec('SELECT * FROM accounts WHERE username=?', name).toArray()[0];
-      if (typeof data.recoveryCode !== 'string' || !/^[a-f0-9]{64}$/.test(data.recoveryCode) || !row || !equal(hash(data.recoveryCode), row.recovery_hash)) fail('UNAUTHENTICATED', '用户名或恢复码不正确');
+      if (data.resetToken !== undefined) {
+        const reset = typeof data.resetToken === 'string' && /^[a-f0-9]{64}$/.test(data.resetToken) ? this.sql.exec('SELECT * FROM account_resets WHERE token_hash=?', hash(data.resetToken)).toArray()[0] : null;
+        if (!row || !reset || reset.account_id !== row.id || reset.expires_at <= Date.now()) fail('UNAUTHENTICATED', '重设链接无效或已过期，请联系管理员重新生成');
+        await this.admin.validateReset(reset);
+      } else if (typeof data.recoveryCode !== 'string' || !/^[a-f0-9]{64}$/.test(data.recoveryCode) || !row || !equal(hash(data.recoveryCode), row.recovery_hash)) fail('UNAUTHENTICATED', '用户名或恢复码不正确');
       const salt = random(), digest = passwordHash(data.password, salt), recoveryCode = random();
       return this.store.transaction(async () => {
         this.sql.exec('UPDATE accounts SET salt=?,password_hash=?,recovery_hash=? WHERE id=?', salt, digest, hash(recoveryCode), row.id);
+        bumpAccountRevision(this.sql,row.id);
         this.sql.exec('DELETE FROM sessions WHERE account_id=?', row.id);
+        this.sql.exec('DELETE FROM account_resets WHERE account_id=?', row.id);
         this.sql.exec('DELETE FROM rate_limits WHERE key IN (?,?)', 'recover:' + name, 'login:' + name);
         return { ...this.session(row), recoveryCode };
       });
@@ -137,7 +149,12 @@ export class ClubService extends DurableObject {
     if (path === '/auth/logout') { this.sql.exec('DELETE FROM sessions WHERE token_hash=?', account.tokenHash); return { ok: true }; }
     if (path !== '/api') fail('NOT_FOUND', '接口不存在');
     // Caller identity comes only from the opaque server-side session.
-    return this.run(data.action, data.input, account.id);
+    if (typeof data.action === 'string' && data.action.startsWith('admin') && data.action !== 'adminMembers') this.limit('admin-write:' + account.id, 60, 15 * 60000);
+    // Count attempts outside the edit transaction so failed verification cannot roll the limit back.
+    if (typeof data.action === 'string' && data.action.startsWith('admin') && data.input?.adminPassword !== undefined) this.limit('admin-password:' + account.id, 10, 15 * 60000);
+    const result = await (typeof data.action === 'string' && data.action.startsWith('admin') ? this.admin.execute(data.action, data.input || {}, account.id) : this.run(data.action, data.input, account.id));
+    const currentUser = this.sql.exec('SELECT id,username FROM accounts WHERE id=?', account.id).toArray()[0];
+    return { ...result, currentUser };
   }
   async fetch(request) {
     let data;

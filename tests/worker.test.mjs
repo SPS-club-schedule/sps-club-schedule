@@ -143,3 +143,123 @@ test('shared templates persist in SQLite and batch creation is atomic, repeatabl
   await api('archiveTemplate',{templateId:created.template._id,revision:modified.template.revision},alice.token);
   assert.equal((await api('bootstrap',{clubId},alice.token)).tasks.filter(t=>t.parentTaskId===group.taskId).length,5);
 });
+
+async function adminFixture(prefix) {
+  const creator=(await register(prefix+'_owner','create')).data;
+  const clubId=creator.clubId, invite=(await api('getInvite',{clubId},creator.token)).token;
+  const member=(await register(prefix+'_member','join',{invite})).data;
+  const list=()=>api('adminMembers',{clubId},creator.token);
+  const row=async account=>(await list()).members.find(m=>m.username===account.user.username);
+  const input=target=>({clubId,memberId:target.id,memberVersion:target.syncVersion,accountRevision:target.accountRevision,name:target.name,role:target.role,username:target.username,adminPassword:password});
+  return {creator,member,clubId,invite,list,row,input};
+}
+
+test('admin endpoints require a live same-club admin session and never expose password or recovery data',async()=>{
+  const f=await adminFixture('access'),target=await f.row(f.member);
+  for(const action of ['adminMembers','adminEditMember','adminResetPassword']) {
+    for(const token of [undefined,f.member.token,owner.token]) {
+      const r=await post('/api',{action,input:{...f.input(target),identity:f.creator.user.id,role:'owner'}},token);
+      assert.equal(r.status,token?403:401);
+    }
+  }
+  const listed=await f.list();
+  assert.equal(listed.members.length,2);assert.ok(listed.members.every(m=>m.username));
+  const serialized=JSON.stringify(listed);
+  for(const value of ['password_hash','salt','recovery_hash',f.member.recoveryCode,f.member.token,f.member.user.id]) assert.ok(!serialized.includes(value));
+  const board=await api('bootstrap',{clubId:f.clubId},f.member.token);
+  assert.ok(board.members.every(m=>!('username' in m)&&!('identity' in m)));
+});
+
+test('admin edits update member sync and login usernames atomically, reject duplicates and stale forms',async()=>{
+  const f=await adminFixture('edit'),target=await f.row(f.member),before=await api('bootstrap',{clubId:f.clubId},f.member.token);
+  const collision=await post('/api',{action:'adminEditMember',input:{...f.input(target),name:'Must not persist',username:f.creator.user.username}},f.creator.token);
+  assert.equal(collision.status,409);assert.equal((await f.row(f.member)).name,target.name);
+  const edited=await api('adminEditMember',{...f.input(target),name:'小林',username:'renamed_member'},f.creator.token);
+  assert.equal(edited.member.name,'小林');assert.equal(edited.adminMember.accountRevision,target.accountRevision+1);
+  assert.equal((await post('/auth/login',{username:f.member.user.username,password})).status,401);
+  assert.equal((await post('/auth/login',{username:'RENAMED_MEMBER',password})).status,200);
+  const delta=await api('sync',{clubId:f.clubId,since:before.version},f.member.token);
+  assert.equal(delta.me.name,'小林');assert.equal(delta.currentUser.username,'renamed_member');
+  assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(target),name:'Stale'}},f.creator.token)).status,409);
+  const noPassword=await api('adminEditMember',{...f.input(edited.adminMember),adminPassword:undefined,name:'新称呼'},f.creator.token);
+  assert.equal(noPassword.member.name,'新称呼');
+  assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(noPassword.adminMember),username:'another_name',adminPassword:'wrong-password'}},f.creator.token)).status,403);
+  assert.equal((await f.list()).events.filter(e=>e.action==='edit').length,2);
+});
+
+test('only the creator appoints admins; delegated admins cannot alter creator or peers or their own role',async()=>{
+  const f=await adminFixture('roles'),target=await f.row(f.member);
+  const promoted=await api('adminEditMember',{...f.input(target),role:'admin'},f.creator.token);
+  const adminList=await api('adminMembers',{clubId:f.clubId},f.member.token);
+  assert.equal(adminList.me.role,'admin');
+  const creator=adminList.members.find(m=>m.role==='owner');
+  assert.equal(creator.canEdit,false);
+  for(const input of [
+    {...f.input(creator),name:'Hijacked'},
+    {...f.input(promoted.adminMember),role:'owner'},
+    {...f.input(promoted.adminMember),role:'member'}
+  ]) assert.equal((await post('/api',{action:'adminEditMember',input},f.member.token)).status,403);
+  assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(creator),role:'member'}},f.creator.token)).status,403);
+  const ordinary=(await register('roles_ordinary','join',{invite:f.invite})).data,target2=await f.row(ordinary);
+  const changed=await api('adminEditMember',{...f.input(target2),name:'管理员修改的称呼'},f.member.token);
+  assert.equal(changed.member.name,'管理员修改的称呼');
+  assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(changed.adminMember),role:'admin'}},f.member.token)).status,403);
+  await api('adminEditMember',{...f.input(promoted.adminMember),role:'member'},f.creator.token);
+  assert.equal((await post('/api',{action:'adminMembers',input:{clubId:f.clubId}},f.member.token)).status,403);
+  assert.equal((await api('bootstrap',{clubId:f.clubId},f.member.token)).me.role,'member');
+});
+
+test('reset links are single-use, rotated, persisted, reauthenticated and revoke old sessions and recovery codes on redemption',async()=>{
+  const f=await adminFixture('reset'),target=await f.row(f.member);
+  assert.equal((await post('/api',{action:'adminResetPassword',input:{...f.input(target),adminPassword:undefined}},f.creator.token)).status,403);
+  const first=await api('adminResetPassword',f.input(target),f.creator.token);
+  const second=await api('adminResetPassword',f.input(target),f.creator.token);
+  assert.ok(second.expiresAt>Date.now()+29*60000&&second.expiresAt<=Date.now()+30*60000);
+  assert.notEqual(first.resetToken,second.resetToken);
+  assert.equal((await post('/auth/recover',{username:target.username,password,resetToken:first.resetToken})).status,401);
+  await mf.dispose();mf=new Miniflare(options);
+  const changed=await post('/auth/recover',{username:target.username,password:'New-member-password!',resetToken:second.resetToken});
+  assert.equal(changed.status,200);assert.notEqual(changed.data.recoveryCode,f.member.recoveryCode);
+  assert.equal((await post('/api',{action:'bootstrap',input:{}},f.member.token)).status,401);
+  assert.equal((await post('/auth/recover',{username:target.username,password,resetToken:second.resetToken})).status,401);
+  assert.equal((await post('/auth/recover',{username:target.username,password,recoveryCode:f.member.recoveryCode})).status,401);
+  assert.equal((await post('/auth/login',{username:target.username,password:'New-member-password!'})).status,200);
+  const listed=await f.list();assert.ok(!JSON.stringify(listed).includes(second.resetToken));
+  assert.equal(listed.events.filter(e=>e.action==='reset').length,2);
+});
+
+test('club admins cannot take over accounts in other clubs; account edits remain available to the account owner',async()=>{
+  const f=await adminFixture('multi');
+  await api('createClub',{name:'Another club',nickname:'Other owner',requestId:'multi-other-club'},f.member.token);
+  const target=await f.row(f.member);
+  assert.equal(target.canEdit,true);assert.equal(target.canEditAccount,false);
+  for(const [action,input] of [['adminEditMember',{...f.input(target),username:'stolen_name'}],['adminResetPassword',f.input(target)]]) {
+    assert.equal((await post('/api',{action,input},f.creator.token)).status,403);
+  }
+  const renamed=await api('adminEditMember',{...f.input(target),name:'本社团称呼'},f.creator.token);
+  assert.equal(renamed.member.name,'本社团称呼');
+  const own=await api('adminMembers',{},f.member.token).catch(()=>null);assert.equal(own,null);
+  const clubs=(await api('bootstrap',{},f.member.token)).clubs;
+  const other=clubs.find(c=>c.id!==f.clubId),self=(await api('adminMembers',{clubId:other.id},f.member.token)).members[0];
+  assert.equal(self.canEditAccount,true);
+});
+
+test('demotion cancels pending reset links and joining a different club invalidates earlier account authority',async()=>{
+  const f=await adminFixture('cancel'),target=await f.row(f.member);
+  const promoted=await api('adminEditMember',{...f.input(target),role:'admin'},f.creator.token);
+  const ordinary=(await register('cancel_ordinary','join',{invite:f.invite})).data;
+  const target2=await f.row(ordinary);
+  const reset=await api('adminResetPassword',f.input(target2),f.member.token);
+  await api('adminEditMember',{...f.input(promoted.adminMember),role:'member'},f.creator.token);
+  assert.equal((await post('/auth/recover',{username:target2.username,password,resetToken:reset.resetToken})).status,401);
+  const reset2=await api('adminResetPassword',f.input(target2),f.creator.token);
+  await api('createClub',{name:'New club',nickname:'New owner',requestId:'cancel-other-club'},ordinary.token);
+  assert.equal((await post('/auth/recover',{username:target2.username,password,resetToken:reset2.resetToken})).status,403);
+});
+
+test('failed admin password checks are rate-limited despite edit-transaction rollback',async()=>{
+  const f=await adminFixture('throttle'),target=await f.row(f.member);
+  for(let i=0;i<10;i++) assert.equal((await post('/api',{action:'adminResetPassword',input:{...f.input(target),adminPassword:'wrong-password!'}},f.creator.token)).status,403);
+  assert.equal((await post('/api',{action:'adminResetPassword',input:f.input(target)},f.creator.token)).status,429);
+  assert.equal((await f.list()).events.length,0);
+});

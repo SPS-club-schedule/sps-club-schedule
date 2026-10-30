@@ -3,8 +3,10 @@ import { user } from './api';
 import { calendar } from './calendar';
 import { e, button, link, error, busy, field, syncRow, nav } from './ui';
 import { templatePicker, stepEditors } from './template-views';
+import { roleLabel, isAdmin } from '../shared/permissions';
 export { e } from './ui';
 export { templates, templateEditor } from './template-views';
+export { admin, adminEditor, resetPassword } from './admin-views';
 const brand = `<div class="brand-mark">SPS</div><div class="eyebrow">BETTER TOGETHER</div><h1 class="h1 space">社团的每一件事，<br>一起完成。</h1><p class="muted space">安排任务，约定时间，让每一份参与都有回应。</p>`;
 const parentLink = t => t.parentTaskId ? link('/task?id='+encodeURIComponent(t.parentTaskId),'↳ '+e(t.parentTitle),'parent-task-link small') : '';
 function subtasks(t, b, s) {
@@ -34,7 +36,7 @@ export function entry(s) {
 }
 export function board(s, mine) {
   const b = s.sync.board;
-  if (!b?.club) return `<section class="page">${syncRow(s)}${error(s)}<div class="empty">正在获取社团任务…</div></section>${nav(mine?'mine':'board')}`;
+  if (!b?.club) return `<section class="page">${syncRow(s)}${error(s)}<div class="empty">正在获取社团任务…</div></section>${nav(mine?'mine':'board',b)}`;
   const now = Date.now(), all = b.tasks.map(t=>taskView(t,b,now)), p=parts(now);
   const stats=[all.filter(t=>!t.done).length,all.filter(t=>t.assigned&&!t.myDone).length,all.filter(t=>t.done).length];
   let shown=mine?all.filter(t=>t.assigned):all;
@@ -48,7 +50,7 @@ export function board(s, mine) {
   <div class="section row between"><h2 class="h2">${mine?'我的任务':'社团任务'}</h2>${link('/edit','＋ 发布任务','primary compact')}</div><div class="search-box"><input name="search" aria-label="搜索任务" placeholder="搜索任务" value="${e(s.search)}"></div>
   <div class="row between filter-row"><div class="chips">${[['all','全部'],['pending','待完成'],['done','已完成']].map(([v,l])=>button('filter',l,'chip '+(s.filter===v?'active':''),`data-value="${v}"`)).join('')}</div><span class="small muted">${shown.length} 项</span></div>
   ${shown.map(t=>`<article class="card task-card ${t.done?'completed':''}"><div class="row between"><div class="chips"><span class="pill">${t.modeLabel}</span>${t.priority==='high'&&!t.done?'<span class="pill high">优先</span>':''}</div><span class="pill ${t.status}">${t.statusLabel}</span></div>${parentLink(t)}<div class="row task-title-row">${link('/task?id='+encodeURIComponent(t._id),e(t.title),'grow task-title')}${t.canToggle?button('toggle',t.myDone?'✓':'','check '+(t.myDone?'checked':''),`data-id="${e(t._id)}" aria-label="${t.actionLabel}" ${busy(s)}`):''}</div><div class="row between small"><span class="due ${t.status}">◷ ${t.dueLabel}</span><span class="muted">${e(t.progressLabel)}</span></div><div class="progress space"><div class="progress-fill" style="width:${t.percent}%"></div></div><div class="task-bottom row between"><span class="small muted">${e(t.participantLabel)}</span>${link('/task?id='+encodeURIComponent(t._id),'↗','arrow')}</div></article>`).join('')||`<div class="card empty"><div class="empty-symbol">✓</div><h2 class="h2">${s.search?'没有找到相关任务':'这里暂时没有任务'}</h2><p class="small">发布一项任务，或看看其他分类。</p></div>`}
-  <div class="bottom-note">每一个小小的完成，都让我们更近一步。</div></section>${nav(mine?'mine':'board')}`;
+  <div class="bottom-note">每一个小小的完成，都让我们更近一步。</div></section>${nav(mine?'mine':'board',b)}`;
 }
 export function detail(s) {
   const b=s.sync.board, raw=b?.tasks.find(t=>t._id===s.id), t=raw?taskView(raw,b):null;
@@ -72,9 +74,9 @@ export function editor(s) {
 }
 export function members(s) {
   const b=s.sync.board;
-  if (!b?.club) return `<section class="page">${syncRow(s)}${error(s)}</section>${nav('members')}`;
+  if (!b?.club) return `<section class="page">${syncRow(s)}${error(s)}</section>${nav('members',b)}`;
   return `<section class="page"><div class="eyebrow space">OUR PEOPLE</div><h1 class="h1 space">一起做事的人</h1><p class="muted space">${e(b.club.name)} · ${b.members.length} 位成员</p>${syncRow(s)}${error(s)}
   <div class="card section"><div class="row between"><h2 class="h2">邀请新伙伴</h2><span class="invite-star">✦</span></div><p class="muted small space">将邀请码或邀请链接发送给社团成员。</p><div class="invite-code space">${e(s.invite||'正在获取邀请码…')}</div><div class="row space">${button('copyInvite','复制邀请码','secondary grow compact',s.invite?'':'disabled')}${button('share','分享邀请','primary grow compact',s.invite?'':'disabled')}</div>${b.me.role==='owner'?button('rotateInvite','更换邀请码','plain small space',busy(s)):''}</div>
-  <div class="section row between"><h2 class="h2">社团成员</h2><span class="small muted">所有成员都能发布任务</span></div><div class="card space">${b.members.map(m=>`<div class="row between member-row"><div class="row"><div class="avatar ${m.role==='owner'?'owner':''}">${e(m.name[0])}</div><span>${e(m.name)}${m.id===b.me.id?' <span class="small muted">（我）</span>':''}</span></div><span class="pill">${m.role==='owner'?'创建者':'成员'}</span></div>`).join('')}</div>
-  <form data-form="name" class="section"><label class="label" for="nickname">我的社团称呼</label><div class="row"><input class="grow" id="nickname" name="nickname" value="${e(s.form.nickname??b.me.name)}" required maxlength="20"><button class="secondary compact" ${busy(s)}>保存</button></div></form>${link('/entry','切换、加入或创建社团 →','plain full section center')}<p class="small muted center">当前账号：${e(user()?.username)}</p>${button('logout','退出登录','plain full',busy(s))}</section>${nav('members')}`;
+  <div class="section row between"><h2 class="h2">社团成员</h2><span class="small muted">所有成员都能发布任务</span></div><div class="card space">${b.members.map(m=>`<div class="row between member-row"><div class="row"><div class="avatar ${isAdmin(m.role)?'owner':''}">${e(m.name[0])}</div><span>${e(m.name)}${m.id===b.me.id?' <span class="small muted">（我）</span>':''}</span></div><span class="pill">${roleLabel(m.role)}</span></div>`).join('')}</div>
+  <form data-form="name" class="section"><label class="label" for="nickname">我的社团称呼</label><div class="row"><input class="grow" id="nickname" name="nickname" value="${e(s.form.nickname??b.me.name)}" required maxlength="20"><button class="secondary compact" ${busy(s)}>保存</button></div></form>${link('/entry','切换、加入或创建社团 →','plain full section center')}<p class="small muted center">当前账号：${e(user()?.username)}</p>${button('logout','退出登录','plain full',busy(s))}</section>${nav('members',b)}`;
 }

@@ -51,3 +51,7 @@ API_BASE_URL=https://实际Worker地址 npm run build
 发布新后端前执行测试并检查配置差异。Cloudflare SQLite Durable Objects 提供平台的时间点恢复能力；执行恢复前需确认恢复范围并保存当前状态。源码包不是线上数据备份。没有购买套餐或设置自动升级的脚本；实际额度和费用以账号控制台为准。
 
 官方资料：[Durable Object SQLite 存储](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)、[Workers Node.js crypto](https://developers.cloudflare.com/workers/runtime-apis/nodejs/crypto/)、[GitHub Pages 自定义工作流](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)。
+
+## 管理功能的存储兼容性
+
+成员角色新增 `admin`，现有 `owner` 自动拥有后台权限。首次启动仅增加 `account_versions`（账号变更版本）、`account_resets`（一次性重设令牌摘要、有效期及授权来源）、`admin_audit`（不含凭据的操作记录）三张表；不修改原账号字段、Durable Object 名称或绑定，不复制或重建生产数据。密码重设继续走现有 `/auth/recover`，因此无需变更域名网关。部署时先更新原 API Worker，再发布 Pages 前端。回滚旧前端和 Worker 不会删除新增表或已有账号，但旧版本没有管理功能。

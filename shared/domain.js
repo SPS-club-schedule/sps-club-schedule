@@ -393,4 +393,4 @@ function createService({ store, now, randomId, hash }) {
     return actions[action](input || {}, identity);
   };
 }
-module.exports = { createService, ClubError };
+module.exports = { createService, ClubError, safeMember, safeClub };

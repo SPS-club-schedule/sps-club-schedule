@@ -29,6 +29,10 @@ async function request(path, data) {
       if (response.status === 401 && path === '/api') { saveSession(null); window.dispatchEvent(new Event('sps:logged-out')); }
       throw Object.assign(new Error(result.message || '操作失败'), { code: result.code || 'SERVER' });
     }
+    if (result.data.currentUser && session && result.data.currentUser.id === session.user.id) {
+      session = { ...session, user:result.data.currentUser };
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    }
     return result.data;
   } catch (error) {
     if (error.name === 'AbortError' || error instanceof TypeError) throw Object.assign(new Error('连接失败，请检查网络后重试'), { code: 'NETWORK' });
@@ -39,6 +43,7 @@ const transport = (action, input) => request('/api', { action, input });
 export const sync = createSyncClient({ transport, context: () => ({ namespace: base + ':' + (session?.user.id || 'guest'), clubId: clubId() }) });
 export const bootstrap = options => sync.refresh(options);
 export const call = (action, input) => sync.mutate(action, input);
+export const adminMembers = clubId => transport('adminMembers', { clubId });
 export async function authenticate(mode, data) {
   const result = await request('/auth/' + mode, data);
   saveSession({ token: result.token, user: result.user, expiresAt: result.expiresAt });

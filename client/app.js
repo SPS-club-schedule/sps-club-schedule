@@ -3,6 +3,7 @@ import * as views from './views';
 import { parseDeadline, parts, taskView } from '../shared/view';
 import { shiftMonth } from '../shared/calendar';
 import { templateDraft, draftDeadline, MAX_STEPS } from '../shared/templates';
+import { isAdmin } from '../shared/permissions';
 const root = document.getElementById('app');
 let stop = null, generation = 0, inviteKey = '';
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
@@ -15,7 +16,7 @@ function render() {
   const agendaScroll = root.querySelector('.calendar-agenda-list')?.scrollTop;
   const agendaFocus = active?.matches('.calendar-agenda-list');
   const scroll = window.scrollY;
-  const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor }[s.page] || views.auth)(s);
+  const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, reset:views.resetPassword }[s.page] || views.auth)(s);
   root.innerHTML = html;
   if (name) {
     const next = root.querySelector(`[name="${CSS.escape(name)}"]`);
@@ -49,11 +50,42 @@ async function copy(text) {
   catch { toast('复制未成功，请长按选中内容复制'); }
 }
 function inviteLink(token) { const url = new URL(location.href); url.hash = '/auth?invite=' + token; return url.href; }
+const adminPage = () => ['admin','admin-edit'].includes(s.page);
+function clearAdmin() { s.adminData=null; s.adminTarget=null; s.form={}; s.resetLink=''; }
+async function loadAdmin() {
+  const ticket=generation, club=s.sync.board?.club;
+  if (!adminPage() || !club || !isAdmin(s.sync.board.me.role)) return;
+  s.adminLoading=true;
+  try {
+    const data=await api.adminMembers(club.id);
+    if (ticket!==generation) return;
+    s.adminData=data; s.adminDenied=false;
+    if (s.page==='admin-edit') {
+      const target=data.members.find(m=>m.id===s.id);
+      if (!target) { s.adminTarget=null; throw new Error('成员不存在，请返回管理页'); }
+      if (!s.adminTarget || !target.canEdit || !target.canEditAccount && s.adminTarget.canEditAccount) {
+        s.adminTarget=target;
+        s.form={memberName:target.name,memberRole:target.role,memberUsername:target.username};
+        s.resetLink='';
+      }
+    }
+  } catch(error) {
+    if (ticket!==generation) return;
+    if (['FORBIDDEN','UNAUTHENTICATED'].includes(error.code)) { clearAdmin(); s.adminDenied=true; }
+    s.error=error.message;
+  } finally { if (ticket===generation) { s.adminLoading=false; render(); } }
+}
 function receive(state) {
   s.sync = state;
   if (s.page==='templates' && s.category && state.board && !(state.board.templates || []).some(t=>t.category===s.category)) s.category='';
-  if (state.board && !state.board.club && ['board','mine','task','members','templates'].includes(s.page)) { go('/entry'); return; }
+  if (state.board && !state.board.club && ['board','mine','task','members','templates','admin','admin-edit'].includes(s.page)) { go('/entry'); return; }
   if (state.board?.club && !api.clubId()) api.setClub(state.board.club.id);
+  if (adminPage()) {
+    if (!isAdmin(state.board?.me?.role)) clearAdmin();
+    else if (state.phase==='ready' && !s.adminLoading && s.adminCheckedAt!==state.checkedAt) {
+      s.adminCheckedAt=state.checkedAt; loadAdmin();
+    }
+  }
   if (s.page === 'members' && state.board?.club && state.phase === 'ready') {
     const key = api.user().id + ':' + state.board.club.id + ':' + state.board.club.inviteVersion;
     if (inviteKey !== key) {
@@ -67,12 +99,17 @@ async function route() {
   const ticket = ++generation; if (stop) stop(); stop = null;
   const url = new URL((location.hash.slice(1) || '/board'), 'https://local.invalid');
   const page = url.pathname.slice(1), invitation = url.searchParams.get('invite');
-  if (!api.user() && page !== 'auth') { go('/auth'); return; }
+  if (!api.user() && !['auth','reset'].includes(page)) { go('/auth'); return; }
   if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : '/board'); return; }
   s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId() };
+  if (page==='reset') {
+    s.resetToken=url.searchParams.get('token') || ''; s.form={username:url.searchParams.get('username') || ''};
+    // Keep the bearer secret out of the URL after reading the reset link.
+    history.replaceState(null,'','#/reset');
+  }
   inviteKey = ''; window.scrollTo(0,0); render();
-  if (['board','mine','task','members','templates'].includes(page)) { stop = api.sync.watch(receive); return; }
-  if (page === 'auth') return;
+  if (['board','mine','task','members','templates','admin','admin-edit'].includes(page)) { stop = api.sync.watch(receive); return; }
+  if (page === 'auth' || page==='reset') return;
   try {
     const b = await api.bootstrap({ includeClubs: page === 'entry' });
     if (ticket !== generation) return;
@@ -162,6 +199,17 @@ root.addEventListener('submit', event => {
       if (result.recoveryCode) { s.recovery = result.recoveryCode; render(); }
       else go(data.invite ? '/entry?invite='+encodeURIComponent(data.invite) : '/board');
     }
+    if (kind==='resetPassword') {
+      if (data.password!==data.confirmPassword) throw new Error('两次输入的密码不一致');
+      const result=await api.authenticate('recover',{username:data.username,password:data.password,resetToken:s.resetToken});
+      s.form={}; s.resetToken=''; s.recovery=result.recoveryCode;
+    }
+    if (kind==='adminMember') {
+      const target=s.adminTarget;
+      if (!target?.canEdit) throw new Error('没有管理这位成员的权限');
+      const result=await api.call('adminEditMember',{clubId:s.sync.board.club.id,memberId:target.id,memberVersion:target.syncVersion,accountRevision:target.accountRevision,name:data.memberName,role:data.memberRole,...(target.canEditAccount?{username:data.memberUsername}:{}),...(data.adminPassword?{adminPassword:data.adminPassword}:{})});
+      s.form.adminPassword=''; s.adminTarget=result.adminMember; go('/admin'); toast('成员资料已保存');
+    }
     if (kind === 'club') {
       const result = await api.call(s.joinMode==='create'?'createClub':'joinClub', { nickname: data.nickname, name: data.name, token: data.invite.trim(), requestId: s.requestId });
       api.setClub(result.clubId); go('/board');
@@ -231,6 +279,7 @@ root.addEventListener('click', event => {
   if (action === 'chooseClub') { api.setClub(id); go('/board'); return; }
   if (action === 'continue') { s.recovery = ''; go('/board'); return; }
   if (action === 'copyRecovery') { copy(s.recovery); return; }
+  if (action === 'copyReset') { copy(s.resetLink); return; }
   if (action === 'copyInvite') { copy(s.invite); return; }
   if (action === 'share') {
     const url = inviteLink(s.invite);
@@ -239,7 +288,17 @@ root.addEventListener('click', event => {
     return;
   }
   perform(async () => {
-    if (action === 'refresh') await api.bootstrap({ force: true });
+    if (action === 'refresh') { await api.bootstrap({ force: true }); if(adminPage()&&!s.adminLoading) await loadAdmin(); }
+    if (action==='adminReset') {
+      const target=s.adminTarget;
+      if (!target?.canEditAccount) throw new Error('没有修改此账号的权限');
+      if (!s.form.adminPassword) throw new Error('请先填写你自己的密码以确认操作');
+      const result=await api.call('adminResetPassword',{clubId:s.sync.board.club.id,memberId:target.id,memberVersion:target.syncVersion,accountRevision:target.accountRevision,adminPassword:s.form.adminPassword});
+      s.form.adminPassword='';
+      const url=new URL(location.href); url.hash='/reset?token='+result.resetToken+'&username='+encodeURIComponent(result.username);
+      s.resetLink=url.href; s.resetUsername=result.username; s.resetExpiresAt=result.expiresAt;
+      toast('重设链接已生成');
+    }
     if (action === 'toggle') {
       const b = s.sync.board, raw = b.tasks.find(t=>t._id===id); if (!raw) throw new Error('任务已归档');
       const t = taskView(raw,b);
