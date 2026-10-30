@@ -13,7 +13,7 @@ export function calendar(tasks, state, mine, now, booking={},board,settings={}) 
   const c = deadlineCalendar(tasks, { ...state, mine:board?false:mine, now,activities:booking.activities || [] });
   const monthLabel = `${c.month.slice(0, 4)}年${Number(c.month.slice(5))}月`;
   return `<section class="card deadline-calendar section" aria-labelledby="calendar-heading">
-    <div class="row between"><h2 class="h2" id="calendar-heading">任务日历</h2><a class="secondary compact" href="#/calendar" aria-label="打开大日历">展开日历 ↗</a></div>
+    <div class="row between" data-tour="calendar-open"><h2 class="h2" id="calendar-heading">任务日历</h2><a class="secondary compact" href="#/calendar" aria-label="打开大日历">展开日历 ↗</a></div>
     <p class="calendar-hint">${board?(scope.startsWith('department:')?departmentLabel(scope.slice(11))+'截止事项':{mine:'我的截止事项',department:'本部门截止事项',club:'全社团截止事项'}[scope]):mine ? '我的未完成任务' : '社团未完成任务'}与社团活动 · 北京时间</p>
     <div class="row between space"><button type="button" class="secondary compact" data-action="exportCalendar">导出我的日程 .ics</button><a class="plain small" href="${bookingPage}" target="_blank" rel="noopener noreferrer">预约总览 ↗</a></div>
     <p class="hint space">导出我负责的未结束活动与待办截止事项。文件是当前快照，任务变化后需重新导出。</p>

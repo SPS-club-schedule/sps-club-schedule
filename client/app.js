@@ -15,8 +15,10 @@ import {shiftDate,selectedScope} from '../shared/planner';
 import {archivePath,parentPath,MAX_FILE_BYTES} from '../shared/experience';
 import {experienceRoute} from './experience';
 import {startReleaseUpdates} from './release-updates';
+import {createTutorial} from './onboarding';
 import {documentKind,documentTemplate,MAX_DOCUMENT_BYTES,documentDirty,readDocument,loadDocumentRenderer,previewDocument} from './experience-document';
 const root = document.getElementById('app');
+const tutorial=createTutorial({navigate:go});
 const desktop=window.matchMedia('(min-width: 1000px)');
 const workspaceUi={calendarOpen:false,context:'board',clubId:'',planner:{date:parts(Date.now()).date,mode:desktop.matches?'week':'day',showDeadlines:true}};
 let stop = null, generation = 0, inviteKey = '', adminLoad = 0;
@@ -56,6 +58,7 @@ function render() {
   const agenda = root.querySelector('.calendar-agenda-list');
   if (agenda) { agenda.scrollTop = agendaScroll || 0; if (agendaFocus) agenda.focus({ preventScroll: true }); }
   window.scrollTo(0, scroll);
+  tutorial.update(s,api.user()?.id);
 }
 function toast(message) {
   const el = document.getElementById('toast'); el.textContent = message; el.hidden = false;
@@ -446,6 +449,7 @@ root.addEventListener('click', event => {
   const el = event.target.closest('[data-action]'); if (!el || el.disabled) return;
   const { action, value, id } = el.dataset;
   if (s.busy) return;
+  if(action==='tutorial'){tutorial.open(s,api.user()?.id);return;}
   if(action.startsWith('experience')){experienceAction(action,id);return;}
   if(action==='closePlanner'){workspaceUi.calendarOpen=false;if(s.page==='calendar')go('/'+(workspaceUi.context==='mine'?'mine':'board'));else render();return;}
   if(action==='plannerMove'){workspaceUi.planner.date=shiftDate(workspaceUi.planner.date,Number(value)*(workspaceUi.planner.mode==='day'?1:7));render();return;}
@@ -593,7 +597,7 @@ async function start() {
     if (!response.ok) throw new Error('配置加载失败，请刷新页面');
     const config = await response.json(); api.configure(config.apiBase);configureBooking(config.bookingApiBase);
     api.sync.setVisible(!document.hidden); api.sync.setOnline(navigator.onLine); await route();
-    startReleaseUpdates({safe:()=>!s.busy&&!s.recovery&&!s.resetLink&&!s.resetToken&&!s.experienceDocument?.editing&&!s.experienceFiles?.length&&!root.querySelector('form')&&!document.querySelector('dialog[open]')&&!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')});
+    startReleaseUpdates({safe:()=>!tutorial.active&&!s.busy&&!s.recovery&&!s.resetLink&&!s.resetToken&&!s.experienceDocument?.editing&&!s.experienceFiles?.length&&!root.querySelector('form')&&!document.querySelector('dialog[open]')&&!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')});
   } catch (error) { root.innerHTML = `<section class="page"><h1 class="h1">暂时无法连接</h1><p class="error">${views.e(error.message)}</p><button data-action="reload">重新加载</button></section>`; }
 }
 start();

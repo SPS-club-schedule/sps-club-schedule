@@ -8,3 +8,20 @@
 #release-notice{position:fixed;z-index:100;bottom:85px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100% - 32px);padding:12px 18px;border:1px solid #bacbb1;border-radius:12px;background:#f3f8ec;color:#34532c;box-shadow:0 4px 20px #18381b12;font-size:13px;line-height:1.6;pointer-events:none}
 #release-notice[hidden]{display:none}
 @media(min-width:1000px){#release-notice{bottom:24px}}
+
+#member-guide{position:fixed;inset:0;z-index:10000;pointer-events:none}
+#member-guide[hidden]{display:none}
+.guide-shade{position:fixed;background:#142b24b8;pointer-events:auto}
+.guide-outline{position:fixed;border:3px solid #c0e8ad;border-radius:12px;box-shadow:0 0 0 1px #245b45,0 0 22px #c0e8ad55;pointer-events:none}
+.guide-coach{position:fixed;box-sizing:border-box;width:min(340px,calc(100vw - 24px));padding:18px;border:1px solid #dce6dc;border-radius:16px;background:#fbfcf8;color:#20372f;box-shadow:0 12px 50px #102b3040;pointer-events:auto;overflow:auto;overscroll-behavior:contain}
+.guide-top,.guide-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.guide-top .eyebrow{letter-spacing:1px}
+.guide-top button{white-space:nowrap;padding:5px 8px}
+.guide-coach h2{font-size:19px;line-height:1.45;margin:10px 0;outline:none}
+.guide-coach p{font-size:14px;line-height:1.75;margin:8px 0 14px;color:#52695e}
+.guide-actions{justify-content:flex-end}
+.guide-actions button{padding:9px 14px}
+.guide-prompt{color:#245b45;font-size:12px;font-weight:600}
+body.member-guide-active{scroll-behavior:auto}
+body.member-guide-active [data-tour="task-people"],body.member-guide-active [data-tour="child-people"]{max-height:250px;overflow:auto;padding:4px;overscroll-behavior:contain}
+@media(max-width:600px){.guide-coach{padding:14px}.guide-coach h2{font-size:17px;margin:6px 0}.guide-coach p{font-size:13px;margin:6px 0 10px}}

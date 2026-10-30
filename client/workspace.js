@@ -1,6 +1,6 @@
 import * as views from './views';
 import {planner} from './planner';
-import {e,link,nav} from './ui';
+import {e,link,nav,button} from './ui';
 import {experienceDirectory} from './experience';
 
 export function workspace(s,content,ui) {
@@ -10,10 +10,11 @@ export function workspace(s,content,ui) {
   const editing=['edit','template-edit'].includes(s.page),calendarRoute=s.page==='calendar';
   const hasPanel=editing || ui.calendarOpen || calendarRoute || experienceRoute;
   const contextPage=s.page==='template-edit'?'templates':ui.context==='mine'?'mine':'board';
-  const context={...s,page:contextPage,error:'',sync:{...s.sync,board:b},search:s.contextSearch||'',filter:s.contextFilter||'all'};
+  const canGuide=['board','mine','calendar'].includes(s.page)||s.page==='edit'&&!s.id&&!s.parentId;
+  const context={...s,guideHidden:!canGuide,page:contextPage,error:'',sync:{...s.sync,board:b},search:s.contextSearch||'',filter:s.contextFilter||'all'};
   const terminal=experienceRoute?experienceDirectory(s):editing||calendarRoute?(contextPage==='templates'?views.templates(context):views.board(context,contextPage==='mine')):content;
   const active=editing?(s.page==='template-edit'?'templates':'board'):calendarRoute?'calendar':s.page.startsWith('admin')?'admin':s.page;
-  return `<div class="workspace ${hasPanel?'has-panel':''} ${editing||calendarRoute||experienceRoute?'mobile-panel-route':''}"><aside class="desktop-sidebar"><a class="sidebar-brand" href="#/${b?.club?'board':'experience'}"><span class="logo">S</span><span>SPS<span class="sidebar-caption">社团工作台</span></span></a><div class="sidebar-club">${e(b?.club?.name||'SPS 经验档案')}</div>${b?.club?nav(active,b):'<nav class="nav">'+link('/experience','<span class="nav-icon">▣</span>经验档案','nav-item active')+'</nav>'}${b?.club?link('/calendar','<span class="nav-icon">◷</span>日程全览','sidebar-calendar '+(calendarRoute?'active':'')):''}<div class="sidebar-bottom">${b?.me?link('/account',`<span class="avatar">${e(b.me.name?.slice(0,1))}</span><span>${e(b.me.name)}<small>账号设置</small></span>`,'sidebar-account')+link('/entry','切换社团 ↗','plain small'):link('/auth?next=experience','成员登录 →','primary full')}</div></aside>
+  return `<div class="workspace ${hasPanel?'has-panel':''} ${editing||calendarRoute||experienceRoute?'mobile-panel-route':''}"><aside class="desktop-sidebar"><a class="sidebar-brand" href="#/${b?.club?'board':'experience'}"><span class="logo">S</span><span>SPS<span class="sidebar-caption">社团工作台</span></span></a><div class="sidebar-club">${e(b?.club?.name||'SPS 经验档案')}</div>${b?.club?nav(active,b):'<nav class="nav">'+link('/experience','<span class="nav-icon">▣</span>经验档案','nav-item active')+'</nav>'}${b?.club?link('/calendar','<span class="nav-icon">◷</span>日程全览','sidebar-calendar '+(calendarRoute?'active':'')):''}<div class="sidebar-bottom">${b?.me?(canGuide?button('tutorial','新手指南','secondary full space'):'')+link('/account',`<span class="avatar">${e(b.me.name?.slice(0,1))}</span><span>${e(b.me.name)}<small>账号设置</small></span>`,'sidebar-account')+link('/entry','切换社团 ↗','plain small'):link('/auth?next=experience','成员登录 →','primary full')}</div></aside>
   <main class="workspace-main"><section class="terminal-pane" aria-label="社团工作台"><div class="terminal-chrome"><span><i></i>工作台</span><span>独立滚动</span></div><div class="terminal-scroll" data-scroll-key="terminal-${editing||calendarRoute?contextPage:s.page}">${terminal}</div></section>
   ${experienceRoute?`<section class="side-pane experience-pane" aria-label="经验档案内容">${content}</section>`:editing?`<section class="side-pane editor-pane" aria-label="${s.page==='template-edit'?'模板':'任务'}编辑区"><div class="side-pane-bar"><span>${s.page==='template-edit'?'模板工作区':'任务工作区'}</span><span>更宽的空间，专注安排</span></div>${content}</section>`:hasPanel?`<section class="side-pane calendar-pane" aria-label="大日历">${planner({...s,sync:{...s.sync,board:b}},ui.planner)}</section>`:`<aside class="workspace-rest"><div class="eyebrow">YOUR CLUB, IN VIEW</div><h1>把安排展开，<br>让协作更从容。</h1><p>工作台就在手边。<br>日历与编辑器，将在这里展开。</p><div class="workspace-shortcuts">${link('/calendar','◷　展开日程全览','primary')}${link('/edit','＋　安排新任务','secondary')}${link('/template-edit','▤　创建共享模板','plain')}</div></aside>`}</main></div>`;
 }
