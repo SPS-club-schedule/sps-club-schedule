@@ -1,6 +1,7 @@
 'use strict';
 const { seminarTemplate, relativeDeadline, MAX_STEPS } = require('./templates');
 const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments');
+const { isAdmin } = require('./permissions');
 
 // Shared by the cloud function and the local demonstration. Identity is injected
 // by the adapter; no action trusts a member ID supplied as the caller.
@@ -165,7 +166,7 @@ function createService({ store, now, randomId, hash }) {
       const name = text(input.nickname, '社团内称呼', 20);
       return store.transaction(async tx => {
         const invite = await tx.get('invites', hash(token));
-        if (!invite) fail('NOT_FOUND', '邀请已失效，请向社团成员获取新邀请');
+        if (!invite) fail('NOT_FOUND', '邀请已失效，请向管理员获取新邀请');
         const club = await tx.get('clubs', invite.clubId);
         const department = invite.department || '';
         if (!validDepartment(department) || !club || (department ? club.departmentInviteHashes?.[department] : club.inviteHash) !== hash(token)) fail('NOT_FOUND', '邀请已失效');
@@ -181,7 +182,8 @@ function createService({ store, now, randomId, hash }) {
     },
     async getInvite(input, identity) {
       return store.transaction(async tx => {
-        await member(tx, input.clubId, identity);
+        const me = await member(tx, input.clubId, identity);
+        if (!isAdmin(me.role)) fail('FORBIDDEN', '仅本社团管理员可以查看和分享邀请码');
         let club = await tx.get('clubs', input.clubId);
         // Existing clubs acquire department codes on first use; their old code
         // and all memberships remain valid. Initialization is atomic/retry-safe.

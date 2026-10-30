@@ -156,7 +156,7 @@ async function adminFixture(prefix) {
 
 test('admin endpoints require a live same-club admin session and never expose password or recovery data',async()=>{
   const f=await adminFixture('access'),target=await f.row(f.member);
-  for(const action of ['adminMembers','adminEditMember','adminResetPassword']) {
+  for(const action of ['adminMembers','adminEditMember','adminResetPassword','getInvite']) {
     for(const token of [undefined,f.member.token,owner.token]) {
       const r=await post('/api',{action,input:{...f.input(target),identity:f.creator.user.id,role:'owner'}},token);
       assert.equal(r.status,token?403:401);
@@ -192,6 +192,8 @@ test('only the creator appoints admins; delegated admins cannot alter creator or
   const promoted=await api('adminEditMember',{...f.input(target),role:'admin'},f.creator.token);
   const adminList=await api('adminMembers',{clubId:f.clubId},f.member.token);
   assert.equal(adminList.me.role,'admin');
+  const invitations=await api('getInvite',{clubId:f.clubId},f.member.token);
+  assert.equal(invitations.token,f.invite); assert.equal(invitations.departments.length,3);
   const creator=adminList.members.find(m=>m.role==='owner');
   assert.equal(creator.canEdit,false);
   for(const input of [
@@ -206,6 +208,7 @@ test('only the creator appoints admins; delegated admins cannot alter creator or
   assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(changed.adminMember),role:'admin'}},f.member.token)).status,403);
   await api('adminEditMember',{...f.input(promoted.adminMember),role:'member'},f.creator.token);
   assert.equal((await post('/api',{action:'adminMembers',input:{clubId:f.clubId}},f.member.token)).status,403);
+  assert.equal((await post('/api',{action:'getInvite',input:{clubId:f.clubId}},f.member.token)).status,403);
   assert.equal((await api('bootstrap',{clubId:f.clubId},f.member.token)).me.role,'member');
 });
 

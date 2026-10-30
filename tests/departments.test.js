@@ -78,6 +78,35 @@ test('failed department initialization leaves no partial invitations and can be 
   assert.deepEqual(f.store.snapshot(),before); f.store.transaction=transaction;
   assert.equal((await f.run('getInvite',{clubId:f.clubId},'owner')).departments.length,3);
 });
+test('ordinary members cannot fetch or initialize invitations; current same-club admins can', async () => {
+  const f=await fixture(), club=await f.store.get('clubs',f.clubId);
+  const general=(await f.store.get('invites',club.inviteHash)).token;
+  await f.run('joinClub',{token:general,nickname:'Member'},'member');
+  const before=f.store.snapshot();
+  await assert.rejects(f.run('getInvite',{clubId:f.clubId,role:'owner',identity:'owner'},'member'),{code:'FORBIDDEN'});
+  assert.deepEqual(f.store.snapshot(),before);
+  const me=(await f.board('member')).me;
+  const setRole=role=>f.store.transaction(async tx=>{const row=await tx.get('members',me.id); await tx.put('members',me.id,{...row,role});});
+  await setRole('admin');
+  const invites=await f.run('getInvite',{clubId:f.clubId},'member');
+  assert.equal(invites.token,general); assert.equal(invites.departments.length,3);
+  await setRole('member');
+  await assert.rejects(f.run('getInvite',{clubId:f.clubId},'member'),{code:'FORBIDDEN'});
+  assert.deepEqual(await f.run('getInvite',{clubId:f.clubId},'owner'),invites);
+});
+test('ordinary member pages never render invitation codes or controls even with stale admin invitation state', async () => {
+  const bundle=buildSync({entryPoints:['client/views.js'],bundle:true,format:'esm',write:false});
+  const views=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+  const me={id:'me',name:'Member',role:'member',department:'academic'};
+  const state={sync:{phase:'ready',board:{club:{id:'club',name:'SPS'},me,members:[me]}},form:{},invites:{token:'private-general',departments:[{id:'academic',token:'private-academic'}]},inviteDepartment:'academic'};
+  const html=views.members(state);
+  for(const value of ['private-general','private-academic','inviteDepartment','copyInvite','data-action="share"','rotateInvite','邀请新伙伴']) assert.ok(!html.includes(value),value);
+  assert.ok(html.includes('邀请新成员请联系本社团管理员')); assert.ok(html.includes('学术部'));
+  for(const role of ['admin','owner']) {
+    me.role=role; const allowed=views.members(state);
+    assert.ok(allowed.includes('private-academic')); assert.ok(allowed.includes('copyInvite')); assert.ok(allowed.includes('data-action="share"'));
+  }
+});
 test('member and admin pages show departments, select matching invitation codes and support department search/editing', async () => {
   const bundle=buildSync({entryPoints:['client/views.js'],bundle:true,format:'esm',write:false});
   const views=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));

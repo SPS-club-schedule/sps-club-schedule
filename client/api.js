@@ -1,4 +1,5 @@
 import { createSyncClient } from '../shared/sync-client';
+import { isAdmin } from '../shared/permissions';
 let base = '';
 const SESSION_KEY = 'sps-web-session';
 let session;
@@ -56,7 +57,12 @@ export async function logout() {
   await request('/auth/logout', {}); saveSession(null);
 }
 let inviteCache = null;
+export function clearInviteCache() { inviteCache = null; }
 export function getInvite(board) {
+  if (!isAdmin(board?.me?.role)) {
+    clearInviteCache();
+    return Promise.reject(Object.assign(new Error('仅本社团管理员可以查看和分享邀请码'), { code:'FORBIDDEN' }));
+  }
   const key = user().id + ':' + board.club.id + ':' + board.club.inviteVersion;
   if (inviteCache?.key === key) return inviteCache.promise;
   const cached = { key, promise: transport('getInvite', { clubId: board.club.id }) };

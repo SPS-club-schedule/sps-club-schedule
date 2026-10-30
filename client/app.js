@@ -87,7 +87,9 @@ function receive(state) {
       s.adminCheckedAt=state.checkedAt; loadAdmin();
     }
   }
-  if (s.page === 'members' && state.board?.club && state.phase === 'ready') {
+  if (!isAdmin(state.board?.me?.role)) {
+    inviteKey = ''; s.invites = null; api.clearInviteCache();
+  } else if (s.page === 'members' && state.board?.club && state.phase === 'ready') {
     const key = api.user().id + ':' + state.board.club.id + ':' + state.board.club.inviteVersion;
     if (inviteKey !== key) {
       inviteKey = key; s.invites = null; const ticket = generation;
@@ -282,6 +284,7 @@ root.addEventListener('click', event => {
   if (action === 'continue') { s.recovery = ''; go('/board'); return; }
   if (action === 'copyRecovery') { copy(s.recovery); return; }
   if (action === 'copyReset') { copy(s.resetLink); return; }
+  if (['copyInvite','share','rotateInvite'].includes(action) && !isAdmin(s.sync.board?.me?.role)) return;
   if (action === 'copyInvite') { const token=invitationToken(s.invites,s.inviteDepartment); if(token) copy(token); return; }
   if (action === 'share') {
     const token=invitationToken(s.invites,s.inviteDepartment); if(!token) return;
