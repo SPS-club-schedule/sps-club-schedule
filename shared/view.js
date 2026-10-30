@@ -41,14 +41,14 @@ function taskView(task, board, now = Date.now()) {
     hasDuration:hasDuration(task), durationLabel:durationLabel(task),
     parentTitle: task.parentTaskId ? (board.tasks || []).find(t => t._id === task.parentTaskId)?.title || '主任务' : '',
     participants, count, total, done, assigned, myDone, canToggle, canManage,
-    creatorName: creator ? creator.name : '社团成员',
+    creatorName: creator ? creator.name : '已离开的成员',
     modeLabel: task.mode === 'individual' ? '逐人完成' : '协作完成',
     status: done ? 'done' : task.dueAt < now ? 'overdue' : task.dueAt - now < 86400000 ? 'soon' : 'open',
     statusLabel: done ? '已完成' : task.dueAt < now ? '已逾期' : task.dueAt - now < 86400000 ? '即将截止' : '进行中',
     dueLabel: dueLabel(task.dueAt, now), fullDue: parts(task.dueAt).date + ' ' + parts(task.dueAt).time,
     percent: Math.round(count / total * 100),
-    participantLabel: participants.length === members.length ? '全体成员' : participants.map(p => p.name).join('、'),
-    progressLabel: task.mode === 'individual' ? `${count}/${total} 人完成` : done ? `${(members.find(m => m.id === task.sharedCompletion.memberId) || {}).name || '成员'}已完成` : `${participants.length} 位负责人`,
+    participantLabel: participants.length === members.length && members.every(m => task.participantIds.includes(m.id)) ? '全体成员' : participants.map(p => p.name).join('、'),
+    progressLabel: task.mode === 'individual' ? `${count}/${total} 人完成` : done ? `${(members.find(m => m.id === task.sharedCompletion.memberId) || {}).name || '已离开的成员'}已完成` : `${participants.length} 位负责人`,
     actionLabel: myDone ? task.mode === 'shared' ? '重新打开任务' : '撤销我的完成' : task.mode === 'shared' ? '完成这项任务' : '标记我已完成'
   });
 }

@@ -5,7 +5,7 @@
 function createSyncClient({ transport, context, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
   let selected = null, board = null, generation = 0, epoch = 0;
   let inFlight = null, timer = null, timerAt = 0, writes = 0, dirty = false;
-  const taskRevisions = new Map(), templateRevisions = new Map();
+  const taskRevisions = new Map(), templateRevisions = new Map(), memberVersions = new Map();
   let visible = true, online = true, blocked = false;
   let phase = 'idle', message = '', checkedAt = 0, idleCount = 0, failures = 0;
   const listeners = new Set();
@@ -20,7 +20,7 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
     // bootstrap discovers the first club before the page persists its selection.
     if (selected && selected.namespace === next.namespace && board && board.club && board.club.id === next.clubId) { selected = next; return; }
     selected = next; generation += 1; epoch += 1; cancel();
-    board = null; inFlight = null; checkedAt = 0; idleCount = 0; failures = 0; taskRevisions.clear(); templateRevisions.clear();
+    board = null; inFlight = null; checkedAt = 0; idleCount = 0; failures = 0; taskRevisions.clear(); templateRevisions.clear(); memberVersions.clear();
     dirty = false; blocked = false; phase = online ? 'idle' : 'offline'; message = '';
   }
   function schedule(keepEarlier = false) {
@@ -45,14 +45,22 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
   function mergeMembers(current, patches) {
     const members = new Map(current.map(member => [member.id, member]));
     for (const member of patches) {
-      const previous = members.get(member.id);
-      if (!previous || (previous.syncVersion || 0) <= (member.syncVersion || 0)) members.set(member.id, member);
+      const version = member.syncVersion || 0;
+      if ((memberVersions.get(member.id) || 0) > version) continue;
+      memberVersions.set(member.id, version);
+      if (member.archived) members.delete(member.id); else members.set(member.id, member);
     }
     return Array.from(members.values()).sort((a, b) => a.joinedAt - b.joinedAt);
   }
   function acceptRead(result) {
     if (result.unchanged) return false;
     if (result.full || !board || !result.club) {
+      // A full refresh can discover deletions without explicit tombstones.
+      // Remember these too, so an older edit acknowledgement cannot restore one.
+      for (const member of board?.members || []) {
+        if (!(result.members || []).some(m => m.id === member.id)) memberVersions.set(member.id, result.version);
+      }
+      for (const member of result.members || []) memberVersions.set(member.id, member.syncVersion || 0);
       board = Object.assign({}, result, { clubs: result.clubs || (board && board.clubs) || [], templates: result.templates || [] });
       taskRevisions.clear(); templateRevisions.clear();
       for (const task of board.tasks || []) taskRevisions.set(task._id, task.revision);
@@ -79,7 +87,7 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
     if (!options.force && !options.includeClubs && !dirty && board && phase === 'ready' && now() - checkedAt < 10000) return Promise.resolve(board);
     const full = !board || !board.club || options.includeClubs;
     const readGeneration = generation, readEpoch = epoch;
-    const input = full ? { clubId: selected.clubId || undefined } : { clubId: board.club.id, since: board.version };
+    const input = full ? { clubId: selected.clubId || undefined } : { clubId: board.club.id, since: board.version, memberTombstones: true };
     const ticket = { full, promise: null };
     cancel(); blocked = false; phase = 'syncing'; message = ''; emit();
     ticket.promise = Promise.resolve().then(() => transport(full ? 'bootstrap' : 'sync', input)).then(result => {

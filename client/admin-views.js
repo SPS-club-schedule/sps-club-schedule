@@ -1,4 +1,4 @@
-import { isAdmin, roleLabel } from '../shared/permissions';
+import { isAdmin, roleLabel, canDeleteMember } from '../shared/permissions';
 import { DEPARTMENTS, departmentLabel } from '../shared/departments';
 import { parts } from '../shared/view';
 import { e, button, link, error, busy, field, syncRow, nav } from './ui';
@@ -13,12 +13,12 @@ export function admin(s) {
   const denied=guard(s); if (denied) return denied;
   const b=s.sync.board, data=s.adminData, query=(s.search||'').trim().toLowerCase();
   const members=(data?.members||[]).filter(m=>(m.name+' '+m.username+' '+departmentLabel(m.department)).toLowerCase().includes(query));
-  const name=id=>data.members.find(m=>m.id===id)?.name || '社团成员';
+  const name=id=>data.members.find(m=>m.id===id)?.name || '已删除成员';
   const labels={name:'称呼',role:'角色',username:'用户名',department:'所属部门'};
   return `<section class="page"><div class="eyebrow space">MEMBER ADMINISTRATION</div><div class="row between space"><h1 class="h1">成员与账号管理</h1><span class="pill">${roleLabel(b.me.role)}</span></div><p class="muted small space">${e(b.club.name)} · 管理成员资料与登录账号</p>${syncRow(s)}${error(s)}
   <div class="banner space">创建者可以任免管理员；管理员可以管理普通成员及其所属部门。</div>${link('/members','获取部门邀请码 →','plain small space')}<div class="search-box"><input name="search" aria-label="搜索成员、用户名或部门" placeholder="搜索成员、用户名或部门" value="${e(s.search)}"></div>
   ${!data?'<p class="empty">正在加载成员账号…</p>':`<div class="small muted space">${members.length} 位成员</div>${members.map(m=>`<article class="card admin-member space"><div class="row"><div class="avatar ${isAdmin(m.role)?'owner':''}">${e(m.name[0])}</div><div class="grow"><div class="row between"><strong class="wrap">${e(m.name)}${m.id===b.me.id?'（我）':''}</strong><span class="pill">${roleLabel(m.role)}</span></div><p class="small muted wrap">@${e(m.username||'无网页账号')} · ${e(departmentLabel(m.department))}</p></div></div><div class="row between space"><span class="small muted">加入于 ${date(m.joinedAt)}</span>${m.canEdit?link('/admin-edit?id='+encodeURIComponent(m.id),'编辑资料 →','secondary compact'):'<span class="small muted">由创建者管理</span>'}</div></article>`).join('')||'<p class="empty">没有匹配的成员。</p>'}
-  <h2 class="h2 section">最近管理记录</h2><div class="card space">${data.events.map(event=>`<div class="admin-event"><p class="small wrap">${e(name(event.actorId))} ${event.action==='reset'?'生成密码重设链接：':'修改'+event.fields.map(f=>labels[f]||f).map(e).join('、')+'：'}${e(name(event.targetId))}</p><span class="hint">${stamp(event.at)} · 北京时间</span></div>`).join('')||'<p class="small muted">还没有管理操作。</p>'}</div>`}</section>${nav('admin',b)}`;
+  <h2 class="h2 section">最近管理记录</h2><div class="card space">${data.events.map(event=>`<div class="admin-event"><p class="small wrap">${e(name(event.actorId))} ${event.action==='delete'?'删除账号：':event.action==='reset'?'生成密码重设链接：':'修改'+event.fields.map(f=>labels[f]||f).map(e).join('、')+'：'}${e(name(event.targetId))}</p><span class="hint">${stamp(event.at)} · 北京时间</span></div>`).join('')||'<p class="small muted">还没有管理操作。</p>'}</div>`}</section>${nav('admin',b)}`;
 }
 export function adminEditor(s) {
   const denied=guard(s); if (denied) return denied;
@@ -38,6 +38,7 @@ export function adminEditor(s) {
   <button class="primary full section" type="submit" ${busy(s)}>${s.busy?'正在保存…':'保存修改'}</button>
   </fieldset></form>
   ${m.canEditAccount?`<section class="card section"><h2 class="h2">帮助成员重设密码</h2><p class="small muted space">生成一个30分钟内有效、仅能使用一次的链接，交给该成员自行设置新密码。完成后会退出所有旧会话，并生成新的账号恢复码。</p>${button('adminReset','生成密码重设链接','secondary full space',busy(s))}${s.resetLink?`<div class="space" role="status"><label class="label" for="reset-link">发送给 ${e(s.resetUsername)}</label><textarea id="reset-link" readonly aria-label="密码重设链接">${e(s.resetLink)}</textarea><p class="hint">有效至 ${stamp(s.resetExpiresAt)}（北京时间）。再次生成将使旧链接失效。</p>${button('copyReset','复制重设链接','primary full space')}</div>`:''}</section>`:''}
+  <section class="card section"><h2 class="h2">删除成员账号</h2>${m.canDeleteAccount&&canDeleteMember(b.me,m)?`<p class="small muted space">永久删除登录账号并移出成员列表，立即撤销所有登录、恢复码与重设链接。已有任务、分工和完成记录保留，历史姓名显示为“已离开的成员”。</p><p class="hint space">不能撤销。请先在上方填写你自己的密码，再确认删除。</p>${button('adminDelete','删除成员账号','danger full space',busy(s))}`:`<p class="small muted space">${e(m.deleteAccountRestriction || '没有删除此账号的权限')}</p>`}</section>
   </section>`;
 }
 export function resetPassword(s) {

@@ -17,7 +17,9 @@ function text(value, label, max, optional) {
   if ((!optional && !clean) || clean.length > max) fail('VALIDATION', `${label}须为${optional ? '0' : '1'}—${max}个字`);
   return clean;
 }
-const safeMember = m => ({ id: m._id, name: m.name, role: m.role, department: m.department || '', joinedAt: m.joinedAt, syncVersion: m.syncVersion || 0 });
+const safeMember = m => m.archived ? { id: m._id, archived: true, syncVersion: m.syncVersion } : ({ id: m._id, name: m.name, role: m.role, department: m.department || '', joinedAt: m.joinedAt, syncVersion: m.syncVersion || 0 });
+// Older memberships have no archived field. Only explicit tombstones are removed.
+const activeMembers = async (db, fields) => (await db.find('members', fields)).filter(m => !m.archived);
 const safeClub = c => ({ id: c._id, name: c.name, inviteVersion: c.inviteVersion || 0 });
 
 function createService({ store, now, randomId, hash }) {
@@ -28,7 +30,7 @@ function createService({ store, now, randomId, hash }) {
   };
   async function member(db, clubId, identity) {
     const m = await db.get('members', memberKey(clubId, identity));
-    if (!m) fail('FORBIDDEN', '请先通过邀请加入这个社团');
+    if (!m || m.archived) fail('FORBIDDEN', '请先通过邀请加入这个社团');
     return m;
   }
   async function taskAccess(db, taskId, identity) {
@@ -129,7 +131,7 @@ function createService({ store, now, randomId, hash }) {
     // fetched again next time; never return a cursor sampled after the scans.
     const version = club.syncVersion || 0;
     const [members, tasks, templates] = await Promise.all([
-      store.find('members', { clubId: club._id }), store.find('tasks', { clubId: club._id, archived: false }),
+      activeMembers(store, { clubId: club._id }), store.find('tasks', { clubId: club._id, archived: false }),
       store.find('templates', { clubId: club._id, archived: false })
     ]);
     return {
@@ -140,7 +142,7 @@ function createService({ store, now, randomId, hash }) {
   }
   const actions = {
     async bootstrap(input, identity) {
-      const mine = await store.find('members', { identity });
+      const mine = await activeMembers(store, { identity });
       const clubs = (await Promise.all(mine.map(async m => {
         const c = await store.get('clubs', m.clubId);
         return c ? { id: c._id, name: c.name } : null;
@@ -167,7 +169,9 @@ function createService({ store, now, randomId, hash }) {
         (club.tasksVersion || 0) > since ? store.findSince('tasks', { clubId: input.clubId }, since) : [],
         (club.templatesVersion || 0) > since ? store.findSince('templates', { clubId: input.clubId }, since) : []
       ]);
-      // Archived task documents are tombstones and must be included in deltas.
+      // Tabs opened before member deletion shipped cannot merge tombstones.
+      if (input.memberTombstones !== true && members.some(m => m.archived)) return snapshot(club, me);
+      // Archived documents (including members) are tombstones needed by deltas.
       return { full: false, version, club: safeClub(club), me: safeMember(members.find(m => m._id === me._id) || me), members: members.map(safeMember), tasks, templates };
     },
     async createClub(input, identity) {
@@ -198,6 +202,7 @@ function createService({ store, now, randomId, hash }) {
         if (!validDepartment(department) || !club || (department ? club.departmentInviteHashes?.[department] : club.inviteHash) !== hash(token)) fail('NOT_FOUND', '邀请已失效');
         const id = memberKey(invite.clubId, identity);
         const existing = await tx.get('members', id);
+        if (existing?.archived) fail('FORBIDDEN', '此账号已删除，请重新注册');
         if (department && existing?.department && existing.department !== department) fail('CONFLICT', `你已属于${departmentLabel(existing.department)}，如需调换部门请联系管理员`);
         if (!existing || department && !existing.department) {
           const change = await stamp(tx, invite.clubId, 'members', club);
@@ -262,7 +267,7 @@ function createService({ store, now, randomId, hash }) {
         const me = await member(tx, input.clubId, identity);
         const previous = await tx.get('templates', templateId);
         if (previous) return unchanged(tx, input.clubId, { template: previous });
-        const fields = templateContent(input, await tx.find('members', { clubId: input.clubId }));
+        const fields = templateContent(input, await activeMembers(tx, { clubId: input.clubId }));
         const change = await stamp(tx, input.clubId, 'templates');
         const template = { ...fields, _id: templateId, clubId: input.clubId, creatorId: me._id, updatedBy: me._id, createdAt: now(), updatedAt: now(), revision: 1, syncVersion: change.version, archived: false };
         await tx.put('templates', templateId, template);
@@ -276,7 +281,7 @@ function createService({ store, now, randomId, hash }) {
         const me = await member(tx, template.clubId, identity);
         if (template.archived) fail('ARCHIVED', '模板已归档');
         if (template.revision !== input.revision) fail('CONFLICT', '模板已被其他成员更新，请返回模板库后重新编辑');
-        const fields = templateContent(input, await tx.find('members', { clubId: template.clubId }),template);
+        const fields = templateContent(input, await activeMembers(tx, { clubId: template.clubId }),template);
         const change = await stamp(tx, template.clubId, 'templates');
         const updated = { ...template, ...fields, updatedBy: me._id, updatedAt: now(), revision: template.revision + 1, syncVersion: change.version };
         await tx.put('templates', template._id, updated);
@@ -308,7 +313,7 @@ function createService({ store, now, randomId, hash }) {
         }
         if (input.parentTaskId) fail('VALIDATION', '模板只能用于创建主任务');
         if (!Array.isArray(input.subtasks) || !input.subtasks.length || input.subtasks.length > MAX_STEPS) fail('VALIDATION', `请保留1—${MAX_STEPS}项子任务`);
-        const roster = await tx.find('members', { clubId: input.clubId });
+        const roster = await activeMembers(tx, { clubId: input.clubId });
         const fields = { ...content(input), ...assignment(input, roster), ...schedule(input) };
         const {dueAt}=fields;
         let sourceTemplate;
@@ -341,7 +346,7 @@ function createService({ store, now, randomId, hash }) {
         const me = await member(tx, input.clubId, identity);
         const previous = await tx.get('tasks', taskId);
         if (previous) return unchanged(tx, input.clubId, { taskId, task: previous });
-        const roster = await tx.find('members', { clubId: input.clubId });
+        const roster = await activeMembers(tx, { clubId: input.clubId });
         const { participantIds } = assignment(input, roster);
         let parent = null;
         if (input.parentTaskId != null && input.parentTaskId !== '') {
@@ -373,7 +378,7 @@ function createService({ store, now, randomId, hash }) {
         const timing=schedule(input,task,!!task.parentTaskId);
         let participantIds = task.participantIds;
         if (task.parentTaskId && (input.participantIds !== undefined || input.participantDepartment)) {
-          const roster = await tx.find('members', { clubId: task.clubId });
+          const roster = await activeMembers(tx, { clubId: task.clubId });
           const { participantIds: requested } = assignment({ ...input, mode: task.mode }, roster);
           const changed = requested.length !== participantIds.length || requested.some(id => !participantIds.includes(id));
           if (changed) {
@@ -437,4 +442,4 @@ function createService({ store, now, randomId, hash }) {
     return actions[action](input || {}, identity);
   };
 }
-module.exports = { createService, ClubError, safeMember, safeClub };
+module.exports = { createService, ClubError, safeMember, safeClub, activeMembers };

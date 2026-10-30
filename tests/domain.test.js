@@ -20,6 +20,30 @@ async function fixture() {
   const create = (overrides = {}, identity = 'owner') => run('createTask', Object.assign({ clubId, requestId: 'create-task-' + sequence++, title: '活动准备', description: '', dueAt: clock + 86400000, mode: 'individual', priority: 'normal', participantIds: Object.values(ids) }, overrides), identity);
   return { run, store, clubId, invite, ids, board, create, time: () => clock, advance: amount => { clock += amount; } };
 }
+
+test('deleted membership tombstones cannot authenticate, rejoin or receive new assignments',async()=>{
+  const f=await fixture();
+  await f.create({participantIds:[f.ids.alice,f.ids.bob]},'alice');
+  const before=await f.board();
+  await f.store.transaction(async tx=>{
+    const club=await tx.get('clubs',f.clubId),version=club.syncVersion+1;
+    await tx.put('members',f.ids.alice,{clubId:f.clubId,archived:true,syncVersion:version});
+    await tx.put('clubs',f.clubId,{...club,syncVersion:version,membersVersion:version});
+  });
+  const board=await f.board(); assert.equal(board.members.length,2);
+  assert.deepEqual(board.tasks,before.tasks);
+  const rendered=taskView(board.tasks[0],board,f.time());
+  assert.equal(rendered.creatorName,'已离开的成员');
+  assert.equal(rendered.participantLabel,'已离开的成员、Bob');
+  for(const [action,input] of [['bootstrap',{clubId:f.clubId}],['sync',{clubId:f.clubId,since:board.version}],['joinClub',{token:f.invite.token,nickname:'Return'}]]) {
+    await assert.rejects(f.run(action,input,'alice'),{code:'FORBIDDEN'});
+  }
+  await assert.rejects(f.create({participantIds:[f.ids.alice]}),{code:'VALIDATION'});
+  const delta=await f.run('sync',{clubId:f.clubId,since:before.version,memberTombstones:true},'bob');
+  assert.deepEqual(delta.members,[{id:f.ids.alice,archived:true,syncVersion:board.version}]);
+  const oldClient=await f.run('sync',{clubId:f.clubId,since:before.version},'bob');
+  assert.equal(oldClient.full,true); assert.ok(oldClient.members.every(m=>m.id!==f.ids.alice && m.name));
+});
 test('all members can publish; independent completions and undo do not change peers', async () => {
   const f = await fixture(); const { taskId } = await f.create({}, 'alice');
   await Promise.all(['owner', 'alice', 'bob'].map(identity => f.run('complete', { taskId, done: true }, identity)));

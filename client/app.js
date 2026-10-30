@@ -42,9 +42,11 @@ function toast(message) {
   const el = document.getElementById('toast'); el.textContent = message; el.hidden = false;
   clearTimeout(toast.timer); toast.timer = setTimeout(() => { el.hidden = true; }, 2400);
 }
-function confirmAction(title, message) {
+function confirmAction(title, message, confirmLabel = '确定', dangerous = false) {
   const dialog = document.getElementById('confirm');
   dialog.querySelector('h2').textContent = title; dialog.querySelector('p').textContent = message;
+  dialog.querySelector('[value="confirm"]').textContent = confirmLabel;
+  dialog.querySelector('[value="confirm"]').className = (dangerous ? 'danger' : 'primary') + ' grow';
   return new Promise(resolve => {
     dialog.returnValue = 'cancel'; dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm'), { once: true }); dialog.showModal();
   });
@@ -66,8 +68,8 @@ async function loadAdmin() {
     s.adminData=data; s.adminDenied=false;
     if (s.page==='admin-edit') {
       const target=data.members.find(m=>m.id===s.id);
-      if (!target) { s.adminTarget=null; throw new Error('成员不存在，请返回管理页'); }
-      if (!s.adminTarget || !target.canEdit || !target.canEditAccount && s.adminTarget.canEditAccount) {
+      if (!target) { s.adminTarget=null; s.form={}; s.resetLink=''; throw new Error('成员不存在，请返回管理页'); }
+      if (!s.adminTarget || !target.canEdit || !target.canEditAccount && s.adminTarget.canEditAccount || !target.canDeleteAccount && s.adminTarget.canDeleteAccount) {
         s.adminTarget=target;
         s.form={memberName:target.name,memberRole:target.role,memberUsername:target.username,memberDepartment:target.department || ''};
         s.resetLink='';
@@ -309,6 +311,14 @@ root.addEventListener('click', event => {
   }
   perform(async () => {
     if (action === 'refresh') { await api.bootstrap({ force: true }); if(adminPage()&&!s.adminLoading) await loadAdmin(); }
+    if (action==='adminDelete') {
+      const target=s.adminTarget, clubId=s.sync.board.club.id, adminPassword=s.form.adminPassword;
+      if (!target?.canDeleteAccount) throw new Error(target?.deleteAccountRestriction || '没有删除此账号的权限');
+      if (!adminPassword) throw new Error('请先填写你自己的密码以确认操作');
+      if (!await confirmAction('永久删除这个账号？',`将删除 ${target.name}（@${target.username}）的登录账号并移出成员列表，所有登录与恢复方式立即失效。已有任务、分工和完成记录会保留，历史姓名显示为“已离开的成员”。此操作不能撤销。`,'永久删除账号',true)) return;
+      await api.call('adminDeleteAccount',{clubId,memberId:target.id,memberVersion:target.syncVersion,accountRevision:target.accountRevision,adminPassword});
+      clearAdmin(); go('/admin'); toast('账号已删除，历史任务与完成记录已保留');
+    }
     if (action==='adminReset') {
       const target=s.adminTarget;
       if (!target?.canEditAccount) throw new Error('没有修改此账号的权限');

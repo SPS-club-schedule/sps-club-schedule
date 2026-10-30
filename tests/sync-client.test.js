@@ -90,6 +90,30 @@ test('out-of-order mutation acknowledgements cannot resurrect archived tasks', a
   assert.deepEqual(h.client.getState().board.tasks, []);
 });
 
+test('member deletion patches remove the member immediately and ignore late edit acknowledgements', async () => {
+  const person={id:'departed',name:'Former member',syncVersion:1}, edit=deferred();
+  const initial={...snapshot(),members:[...snapshot().members,person]};
+  const h=harness(action=>action==='bootstrap'?initial:action==='adminEditMember'?edit.promise:{baseVersion:2,version:3,club:initial.club,member:{id:person.id,archived:true,syncVersion:3}});
+  await h.client.refresh(); const late=h.client.mutate('adminEditMember',{});
+  await h.client.mutate('adminDeleteAccount',{});
+  assert.deepEqual(h.client.getState().board.members,snapshot().members);
+  edit.resolve({baseVersion:1,version:2,club:initial.club,member:{...person,name:'Late name',syncVersion:2}}); await late;
+  assert.deepEqual(h.client.getState().board.members,snapshot().members);
+});
+
+test('other browsers apply member tombstones and full refreshes remember missing members', async () => {
+  const person={id:'departed',name:'Former member',syncVersion:1};
+  for(const full of [false,true]) {
+    const edit=deferred(); let reads=0;
+    const h=harness(action=>action==='adminEditMember'?edit.promise:++reads===1?{...snapshot(),members:[...snapshot().members,person]}:full?snapshot(3):{...snapshot(3),full:false,members:[{id:person.id,archived:true,syncVersion:3}],tasks:[]});
+    await h.client.refresh(); const late=h.client.mutate('adminEditMember',{});
+    await h.client.refresh({force:true});
+    assert.deepEqual(h.client.getState().board.members,snapshot().members);
+    edit.resolve({baseVersion:1,version:2,club:snapshot().club,member:{...person,syncVersion:2}}); await late;
+    assert.deepEqual(h.client.getState().board.members,snapshot().members);
+  }
+});
+
 test('changing identity discards late reads and does not expose the prior club cache', async () => {
   const gate = deferred(); const h = harness(() => gate.promise);
   const old = h.client.refresh(); await flush(); h.selected.namespace = 'person-b'; h.client.select();

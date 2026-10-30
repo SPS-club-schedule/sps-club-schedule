@@ -22,3 +22,18 @@ test('admin views escape names, account fields, audit records and reset links',a
   assert.ok(views.admin(state).includes('id=id%26other'));
   assert.ok(views.admin(state).includes('href="#/admin"'));
 });
+
+test('delete controls respect server eligibility, protect self and owners, and explain retained history',async()=>{
+  const bundle=buildSync({entryPoints:['client/admin-views.js'],bundle:true,format:'esm',write:false});
+  const views=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+  const m={id:'member',name:'Member',username:'member',role:'member',canEdit:true,canEditAccount:true,canDeleteAccount:true};
+  const s={sync:{board:{club:{id:'club'},me:{id:'owner',role:'owner'}}},adminTarget:m,form:{}};
+  const html=views.adminEditor(s); assert.ok(html.includes('data-action="adminDelete"')); assert.ok(html.includes('完成记录保留')); assert.ok(html.includes('不能撤销'));
+  for(const target of [{...m,canDeleteAccount:false,deleteAccountRestriction:'跨社团限制'},{...m,role:'owner'},{...m,id:'owner'}]) {
+    s.adminTarget=target; assert.ok(!views.adminEditor(s).includes('data-action="adminDelete"'));
+  }
+  s.sync.board.me={id:'admin',role:'admin'}; s.adminTarget={...m,role:'admin'};
+  assert.ok(!views.adminEditor(s).includes('data-action="adminDelete"'));
+  s.adminData={members:[m],events:[{actorId:m.id,targetId:'deleted',action:'delete',fields:[],at:Date.now()}]};
+  assert.ok(views.admin(s).includes('删除账号：已删除成员'));
+});
