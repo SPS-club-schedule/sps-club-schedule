@@ -6,9 +6,10 @@ const date = value => value ? parts(value).date : '—';
 const stamp = value => { const p=parts(value); return p.date+' '+p.time; };
 function guard(s) {
   if (!s.sync.board?.club) return `<section class="page">${syncRow(s)}${error(s)}<p class="empty">正在检查管理权限…</p></section>`;
-  if (!isAdmin(s.sync.board.me.role) || s.adminDenied) return `<section class="page">${link('/members','← 返回成员页','plain small')}<h1 class="h1 section">仅管理员可用</h1><p class="muted space">你没有本社团的成员管理权限。</p></section>${nav('members',s.sync.board)}`;
+  if (!isAdmin(s.sync.board.me.role) || s.adminDenied) return `<section class="page">${link('/members','← 返回成员页','plain small')}<h1 class="h1 section">仅管理员可用</h1><p class="muted space">你没有本社团的管理权限。</p></section>${nav('members',s.sync.board)}`;
   return '';
 }
+export { guard as adminGuard };
 export function admin(s) {
   const denied=guard(s); if (denied) return denied;
   const b=s.sync.board, data=s.adminData, query=(s.search||'').trim().toLowerCase();
@@ -16,7 +17,7 @@ export function admin(s) {
   const name=id=>data.members.find(m=>m.id===id)?.name || '已删除成员';
   const labels={name:'称呼',role:'角色',username:'用户名',department:'所属部门'};
   return `<section class="page"><div class="eyebrow space">MEMBER ADMINISTRATION</div><div class="row between space"><h1 class="h1">成员与账号管理</h1><span class="pill">${roleLabel(b.me.role)}</span></div><p class="muted small space">${e(b.club.name)} · 管理成员资料与登录账号</p>${syncRow(s)}${error(s)}
-  <div class="banner space">创建者可以任免管理员；管理员可以管理普通成员及其所属部门。</div>${link('/members','获取部门邀请码 →','plain small space')}<div class="search-box"><input name="search" aria-label="搜索成员、用户名或部门" placeholder="搜索成员、用户名或部门" value="${e(s.search)}"></div>
+  <div class="banner space">创建者可以任免管理员；管理员可以管理普通成员及其所属部门。</div><div class="row between space">${link('/members','获取部门邀请码 →','plain small')}${link('/admin-archives','归档恢复 →','secondary compact')}</div><div class="search-box"><input name="search" aria-label="搜索成员、用户名或部门" placeholder="搜索成员、用户名或部门" value="${e(s.search)}"></div>
   ${!data?'<p class="empty">正在加载成员账号…</p>':`<div class="small muted space">${members.length} 位成员</div>${members.map(m=>`<article class="card admin-member space"><div class="row"><div class="avatar ${isAdmin(m.role)?'owner':''}">${e(m.name[0])}</div><div class="grow"><div class="row between"><strong class="wrap">${e(m.name)}${m.id===b.me.id?'（我）':''}</strong><span class="pill">${roleLabel(m.role)}</span></div><p class="small muted wrap">@${e(m.username||'无网页账号')} · ${e(departmentLabel(m.department))}</p></div></div><div class="row between space"><span class="small muted">加入于 ${date(m.joinedAt)}</span>${m.canEdit?link('/admin-edit?id='+encodeURIComponent(m.id),'编辑资料 →','secondary compact'):'<span class="small muted">由创建者管理</span>'}</div></article>`).join('')||'<p class="empty">没有匹配的成员。</p>'}
   <h2 class="h2 section">最近管理记录</h2><div class="card space">${data.events.map(event=>`<div class="admin-event"><p class="small wrap">${e(name(event.actorId))} ${event.action==='delete'?'删除账号：':event.action==='reset'?'生成密码重设链接：':'修改'+event.fields.map(f=>labels[f]||f).map(e).join('、')+'：'}${e(name(event.targetId))}</p><span class="hint">${stamp(event.at)} · 北京时间</span></div>`).join('')||'<p class="small muted">还没有管理操作。</p>'}</div>`}</section>${nav('admin',b)}`;
 }

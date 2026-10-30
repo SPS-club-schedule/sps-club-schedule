@@ -9,7 +9,7 @@ import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain
 import { scheduleDraft, enableDuration, followStart, followDuration, applyTemplateDuration, changeScheduleField, scheduleFields } from '../shared/schedule-draft';
 import { templateDurationForm, templateDurationValue } from '../shared/template-duration';
 const root = document.getElementById('app');
-let stop = null, generation = 0, inviteKey = '';
+let stop = null, generation = 0, inviteKey = '', adminLoad = 0;
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
 function go(path) { if (location.hash === '#' + path) route(); else location.hash = path; }
 function render() {
@@ -20,7 +20,7 @@ function render() {
   const agendaScroll = root.querySelector('.calendar-agenda-list')?.scrollTop;
   const agendaFocus = active?.matches('.calendar-agenda-list');
   const scroll = window.scrollY;
-  const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, reset:views.resetPassword, account:views.accountSettings }[s.page] || views.auth)(s);
+  const html = s.page === 'board' || s.page === 'mine' ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, 'admin-archives':views.archives, reset:views.resetPassword, account:views.accountSettings }[s.page] || views.auth)(s);
   root.innerHTML = html;
   if (name) {
     const next = root.querySelector(`[name="${CSS.escape(name)}"]`);
@@ -56,8 +56,8 @@ async function copy(text) {
   catch { toast('复制未成功，请长按选中内容复制'); }
 }
 function inviteLink(token) { const url = new URL(location.href); url.hash = '/auth?invite=' + token; return url.href; }
-const adminPage = () => ['admin','admin-edit'].includes(s.page);
-function clearAdmin() { s.adminData=null; s.adminTarget=null; s.form={}; s.resetLink=''; }
+const adminPage = () => ['admin','admin-edit','admin-archives'].includes(s.page);
+function clearAdmin() { adminLoad++; s.adminLoading=false; s.adminData=null; s.archiveData=null; s.adminTarget=null; s.form={}; s.resetLink=''; }
 async function loadAccount() {
   const ticket=generation;
   const result=await api.accountSettings();
@@ -67,10 +67,12 @@ async function loadAccount() {
 async function loadAdmin() {
   const ticket=generation, club=s.sync.board?.club;
   if (!adminPage() || !club || !isAdmin(s.sync.board.me.role)) return;
+  const load=++adminLoad, archivePage=s.page==='admin-archives';
   s.adminLoading=true;
   try {
-    const data=await api.adminMembers(club.id);
-    if (ticket!==generation) return;
+    const data=await (archivePage?api.adminArchives(club.id):api.adminMembers(club.id));
+    if (ticket!==generation || load!==adminLoad) return;
+    if (archivePage) { s.archiveData=data; s.adminDenied=false; return; }
     s.adminData=data; s.adminDenied=false;
     if (s.page==='admin-edit') {
       const target=data.members.find(m=>m.id===s.id);
@@ -82,15 +84,15 @@ async function loadAdmin() {
       }
     }
   } catch(error) {
-    if (ticket!==generation) return;
+    if (ticket!==generation || load!==adminLoad) return;
     if (['FORBIDDEN','UNAUTHENTICATED'].includes(error.code)) { clearAdmin(); s.adminDenied=true; }
     s.error=error.message;
-  } finally { if (ticket===generation) { s.adminLoading=false; render(); } }
+  } finally { if (ticket===generation && (load===adminLoad || s.adminDenied)) { s.adminLoading=false; render(); } }
 }
 function receive(state) {
   s.sync = state;
   if (s.page==='templates' && s.category && state.board && !(state.board.templates || []).some(t=>t.category===s.category)) s.category='';
-  if (state.board && !state.board.club && ['board','mine','task','members','templates','admin','admin-edit'].includes(s.page)) { go('/entry'); return; }
+  if (state.board && !state.board.club && ['board','mine','task','members','templates','admin','admin-edit','admin-archives'].includes(s.page)) { go('/entry'); return; }
   if (state.board?.club && !api.clubId()) api.setClub(state.board.club.id);
   if (adminPage()) {
     if (!isAdmin(state.board?.me?.role)) clearAdmin();
@@ -122,7 +124,7 @@ async function route() {
     history.replaceState(null,'','#/reset');
   }
   inviteKey = ''; window.scrollTo(0,0); render();
-  if (['board','mine','task','members','templates','admin','admin-edit'].includes(page)) { stop = api.sync.watch(receive); return; }
+  if (['board','mine','task','members','templates','admin','admin-edit','admin-archives'].includes(page)) { stop = api.sync.watch(receive); return; }
   if (page === 'auth' || page==='reset') return;
   try {
     if (page==='account') { await loadAccount(); if(ticket===generation) render(); return; }
@@ -177,6 +179,11 @@ function focusInvalidField(event) {
 }
 root.addEventListener('invalid',focusInvalidField,true);
 root.addEventListener('toggle',event=>{
+  if (event.target.matches('details[data-archive-item]')) {
+    s.archiveOpen ||= new Set();
+    const id=event.target.dataset.archiveItem;
+    if (event.target.open) s.archiveOpen.add(id); else s.archiveOpen.delete(id);
+  }
   if (event.target.matches('details[data-step-panel]')) {
     const index=Number(event.target.dataset.stepPanel);
     if (event.target.open) s.openSteps.add(index); else s.openSteps.delete(index);
@@ -318,6 +325,7 @@ root.addEventListener('click', event => {
   if (action === 'chooseClub') { api.setClub(id); go('/board'); return; }
   if (action === 'continue') { s.recovery = ''; go('/board'); return; }
   if (action === 'copyRecovery') { copy(s.recovery); return; }
+  if (action === 'archiveType' && ['tasks','templates'].includes(value)) { s.archiveType=value; s.search=''; render(); return; }
   if (action === 'accountRecoverySaved') { s.recovery=''; render(); window.scrollTo(0,0); return; }
   if (action === 'copyReset') { copy(s.resetLink); return; }
   if (['copyInvite','share','rotateInvite'].includes(action) && !isAdmin(s.sync.board?.me?.role)) return;
@@ -330,6 +338,21 @@ root.addEventListener('click', event => {
     return;
   }
   perform(async () => {
+    if (action==='restoreTask' || action==='restoreTemplate') {
+      if (!isAdmin(s.sync.board?.me?.role)) throw new Error('仅管理员可以恢复归档内容');
+      const template=action==='restoreTemplate', type=template?'templates':'tasks', target=s.archiveData?.[type].find(t=>t._id===id);
+      if (!target) throw new Error('归档内容已更新，请刷新后重试');
+      if (!template && (target.parentArchived || target.parentMissing)) throw new Error('请先恢复主任务，再恢复这项子任务');
+      const ticket=generation, clubId=s.sync.board.club.id;
+      const message=template?`将“${target.name}”恢复到模板库，保留原内容和默认设置。已发布的任务保持不变。`:`将“${target.title}”恢复到任务看板${target.restoreChildCount?'，并一并恢复 '+target.restoreChildCount+' 项子任务':''}。原分工、截止时间和完成记录保留，已过期的未完成任务会显示为逾期。`;
+      if (!await confirmAction(template?'恢复这个模板？':'恢复这项任务？',message,'确认恢复')) return;
+      const result=await api.call(template?'adminRestoreTemplate':'adminRestoreTask',{clubId,revision:target.revision,...(template?{templateId:id}:{taskId:id})});
+      if (ticket!==generation || !s.archiveData || !isAdmin(s.sync.board?.me?.role)) return;
+      const ids=new Set(template?[result.template._id]:result.tasks.map(t=>t._id));
+      // Remove acknowledged restores even if a following refresh loses network.
+      s.archiveData[type]=s.archiveData[type].filter(t=>!ids.has(t._id)).map(t=>ids.has(t.parentTaskId)?{...t,parentArchived:false}:t);
+      await loadAdmin(); toast(template?'模板已恢复到模板库':'任务已恢复，原分工和完成记录已保留');
+    }
     if (action === 'reloadAccount') { await loadAccount(); toast('账号资料已更新'); }
     if (action === 'refresh') { await api.bootstrap({ force: true }); if(adminPage()&&!s.adminLoading) await loadAdmin(); }
     if (action==='adminDelete') {

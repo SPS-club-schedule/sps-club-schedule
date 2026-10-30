@@ -12,6 +12,7 @@ export { e } from './ui';
 export { templates, templateEditor } from './template-views';
 export { admin, adminEditor, resetPassword } from './admin-views';
 export { accountSettings } from './account-views';
+export { archives } from './archive-views';
 const brand = `<div class="brand-mark">SPS</div><div class="eyebrow">BETTER TOGETHER</div><h1 class="h1 space">社团的每一件事，<br>一起完成。</h1><p class="muted space">安排任务，约定时间，让每一份参与都有回应。</p>`;
 const parentLink = t => t.parentTaskId ? link('/task?id='+encodeURIComponent(t.parentTaskId),'↳ '+e(t.parentTitle),'parent-task-link small') : '';
 function subtasks(t, b, s) {

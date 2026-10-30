@@ -45,6 +45,7 @@ export const sync = createSyncClient({ transport, context: () => ({ namespace: b
 export const bootstrap = options => sync.refresh(options);
 export const call = (action, input) => sync.mutate(action, input);
 export const adminMembers = clubId => transport('adminMembers', { clubId });
+export const adminArchives = clubId => transport('adminArchives', { clubId });
 export const accountSettings = () => transport('accountSettings', {});
 export const changeUsername = input => transport('accountChangeUsername', input);
 export const changePassword = input => transport('accountChangePassword', input);

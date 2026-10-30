@@ -90,6 +90,28 @@ test('out-of-order mutation acknowledgements cannot resurrect archived tasks', a
   assert.deepEqual(h.client.getState().board.tasks, []);
 });
 
+test('restores add tasks and templates back to the board and ignore earlier archive acknowledgements',async()=>{
+  for(const template of [false,true]) {
+    const lateArchive=deferred(),record=task(3),start={...snapshot(1,[]),templates:[]};
+    const patch=(base,item)=>({baseVersion:base,version:base+1,club:start.club,...(template?{template:item}:{tasks:[item]})});
+    const h=harness(action=>action==='bootstrap'?start:action==='archive'?lateArchive.promise:patch(2,record));
+    await h.client.refresh(); const late=h.client.mutate('archive',{});
+    await h.client.mutate('restore',{}); lateArchive.resolve(patch(1,task(2,{archived:true}))); await late;
+    assert.deepEqual(h.client.getState().board[template?'templates':'tasks'],[record]);
+  }
+});
+
+test('a full snapshot after re-archiving prevents a delayed restore from reviving the item',async()=>{
+  for(const template of [false,true]) {
+    const restore=deferred();let reads=0;
+    const h=harness(action=>action==='restore'?restore.promise:{...snapshot(++reads===1?2:4,[]),templates:[]});
+    await h.client.refresh();const late=h.client.mutate('restore',{});
+    await h.client.refresh({force:true,includeClubs:true});
+    restore.resolve({baseVersion:2,version:3,club:snapshot().club,...(template?{template:task(3)}:{tasks:[task(3)]})});await late;
+    assert.equal(h.client.getState().board.version,4);assert.deepEqual(h.client.getState().board[template?'templates':'tasks'],[]);
+  }
+});
+
 test('member deletion patches remove the member immediately and ignore late edit acknowledgements', async () => {
   const person={id:'departed',name:'Former member',syncVersion:1}, edit=deferred();
   const initial={...snapshot(),members:[...snapshot().members,person]};

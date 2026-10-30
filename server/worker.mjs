@@ -157,7 +157,7 @@ export class ClubService extends DurableObject {
       this.limit('account-password:' + account.id, 10, 15 * 60000);
     }
     // Caller identity comes only from the opaque server-side session.
-    if (typeof data.action === 'string' && data.action.startsWith('admin') && data.action !== 'adminMembers') this.limit('admin-write:' + account.id, 60, 15 * 60000);
+    if (typeof data.action === 'string' && data.action.startsWith('admin') && !['adminMembers','adminArchives'].includes(data.action)) this.limit('admin-write:' + account.id, 60, 15 * 60000);
     // Count attempts outside the edit transaction so failed verification cannot roll the limit back.
     if (typeof data.action === 'string' && data.action.startsWith('admin') && data.input?.adminPassword !== undefined) this.limit('admin-password:' + account.id, 10, 15 * 60000);
     const result = await (selfAccount ? this.account(data.action, data.input || {}, account) : typeof data.action === 'string' && data.action.startsWith('admin') ? this.admin.execute(data.action, data.input || {}, account.id) : this.run(data.action, data.input, account.id));

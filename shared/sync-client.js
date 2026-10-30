@@ -4,7 +4,7 @@
 // persist private club snapshots across WeChat account changes or app restarts.
 function createSyncClient({ transport, context, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
   let selected = null, board = null, generation = 0, epoch = 0;
-  let inFlight = null, timer = null, timerAt = 0, writes = 0, dirty = false;
+  let inFlight = null, timer = null, timerAt = 0, writes = 0, dirty = false, fullVersion = 0;
   const taskRevisions = new Map(), templateRevisions = new Map(), memberVersions = new Map();
   let visible = true, online = true, blocked = false;
   let phase = 'idle', message = '', checkedAt = 0, idleCount = 0, failures = 0;
@@ -21,7 +21,7 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
     if (selected && selected.namespace === next.namespace && board && board.club && board.club.id === next.clubId) { selected = next; return; }
     selected = next; generation += 1; epoch += 1; cancel();
     board = null; inFlight = null; checkedAt = 0; idleCount = 0; failures = 0; taskRevisions.clear(); templateRevisions.clear(); memberVersions.clear();
-    dirty = false; blocked = false; phase = online ? 'idle' : 'offline'; message = '';
+    dirty = false; fullVersion = 0; blocked = false; phase = online ? 'idle' : 'offline'; message = '';
   }
   function schedule(keepEarlier = false) {
     const wait = dirty ? 0 : delay();
@@ -55,6 +55,7 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
   function acceptRead(result) {
     if (result.unchanged) return false;
     if (result.full || !board || !result.club) {
+      fullVersion = result.version || 0;
       // A full refresh can discover deletions without explicit tombstones.
       // Remember these too, so an older edit acknowledgement cannot restore one.
       for (const member of board?.members || []) {
@@ -111,6 +112,9 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
   }
   function acceptMutation(result) {
     if (!board || !board.club || !result.club || result.club.id !== board.club.id) return;
+    // A full snapshot already covers these writes, including any later archive.
+    // A delayed restore acknowledgement must not bring a re-archived item back.
+    if (result.version <= fullVersion) return;
     const patch = {};
     if (result.tasks || result.task) patch.tasks = mergeRecords(board.tasks, result.tasks || [result.task], taskRevisions);
     if (result.template) patch.templates = mergeRecords(board.templates || [], [result.template], templateRevisions);

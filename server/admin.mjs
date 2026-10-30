@@ -1,6 +1,7 @@
 import permissions from '../shared/permissions.js';
 import domain from '../shared/domain.js';
 import departments from '../shared/departments.js';
+import { listArchives, restoreArchive } from './archive.mjs';
 const { validDepartment } = departments;
 const { isAdmin, canEditMember, canDeleteMember } = permissions;
 const { ClubError, safeMember, safeClub, activeMembers } = domain;
@@ -25,7 +26,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
   CREATE INDEX IF NOT EXISTS admin_audit_club ON admin_audit(club_id,id);`);
   async function access(db, clubId, identity) {
     const actor = await db.get('members', 'm_' + hash(clubId + ':' + identity).slice(0, 32));
-    if (!actor || actor.archived || !isAdmin(actor.role)) fail('FORBIDDEN', '仅本社团管理员可以使用成员管理');
+    if (!actor || actor.archived || !isAdmin(actor.role)) fail('FORBIDDEN', '仅本社团管理员可以使用管理后台');
     return actor;
   }
   async function accountAccess(db, actor, target) {
@@ -56,6 +57,8 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
   }
   const execute = async (action, input, identity) => store.transaction(async db => {
     const actor = await access(db, input.clubId, identity);
+    if (action === 'adminArchives') return listArchives(db,input.clubId);
+    if (['adminRestoreTask','adminRestoreTemplate'].includes(action)) return restoreArchive(db,action,input,actor,now());
     if (action === 'adminMembers') {
       const members = await activeMembers(db, { clubId: input.clubId });
       const events = sql.exec('SELECT actor_member_id,target_member_id,action,fields,created_at FROM admin_audit WHERE club_id=? ORDER BY id DESC LIMIT 30', input.clubId).toArray();
