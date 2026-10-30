@@ -4,6 +4,7 @@ import { parseDeadline, parts, taskView } from '../shared/view';
 import { shiftMonth } from '../shared/calendar';
 import { templateDraft, draftDeadline, MAX_STEPS } from '../shared/templates';
 import { isAdmin } from '../shared/permissions';
+import { departmentLabel, invitationToken } from '../shared/departments';
 const root = document.getElementById('app');
 let stop = null, generation = 0, inviteKey = '';
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
@@ -65,7 +66,7 @@ async function loadAdmin() {
       if (!target) { s.adminTarget=null; throw new Error('成员不存在，请返回管理页'); }
       if (!s.adminTarget || !target.canEdit || !target.canEditAccount && s.adminTarget.canEditAccount) {
         s.adminTarget=target;
-        s.form={memberName:target.name,memberRole:target.role,memberUsername:target.username};
+        s.form={memberName:target.name,memberRole:target.role,memberUsername:target.username,memberDepartment:target.department || ''};
         s.resetLink='';
       }
     }
@@ -89,8 +90,8 @@ function receive(state) {
   if (s.page === 'members' && state.board?.club && state.phase === 'ready') {
     const key = api.user().id + ':' + state.board.club.id + ':' + state.board.club.inviteVersion;
     if (inviteKey !== key) {
-      inviteKey = key; s.invite = ''; const ticket = generation;
-      api.getInvite(state.board).then(result => { if (ticket === generation && inviteKey === key) { s.invite = result.token; render(); } }).catch(error => { if (ticket === generation) { inviteKey = ''; s.error = error.message; render(); } });
+      inviteKey = key; s.invites = null; const ticket = generation;
+      api.getInvite(state.board).then(result => { if (ticket === generation && inviteKey === key) { s.invites = result; render(); } }).catch(error => { if (ticket === generation) { inviteKey = ''; s.error = error.message; render(); } });
     }
   }
   render();
@@ -183,6 +184,7 @@ function inputChanged(event) {
     if (field==='daysBefore') s.steps[Number(step)].customDeadline=false;
     if (event.type==='change') render();
   } else if (name==='selectedTemplate') s.selectedTemplate=value;
+  else if (name==='inviteDepartment') { s.inviteDepartment=value; render(); }
   else if (name==='templateCategory') { s.category=value; render(); }
   else if (name === 'search') { s.search = value; api.sync.touch(); render(); }
   else { s.form[name]=value; if(event.type==='change'&&['date','time'].includes(name)&&s.steps.length) render(); }
@@ -207,12 +209,12 @@ root.addEventListener('submit', event => {
     if (kind==='adminMember') {
       const target=s.adminTarget;
       if (!target?.canEdit) throw new Error('没有管理这位成员的权限');
-      const result=await api.call('adminEditMember',{clubId:s.sync.board.club.id,memberId:target.id,memberVersion:target.syncVersion,accountRevision:target.accountRevision,name:data.memberName,role:data.memberRole,...(target.canEditAccount?{username:data.memberUsername}:{}),...(data.adminPassword?{adminPassword:data.adminPassword}:{})});
+      const result=await api.call('adminEditMember',{clubId:s.sync.board.club.id,memberId:target.id,memberVersion:target.syncVersion,accountRevision:target.accountRevision,name:data.memberName,role:data.memberRole,department:data.memberDepartment,...(target.canEditAccount?{username:data.memberUsername}:{}),...(data.adminPassword?{adminPassword:data.adminPassword}:{})});
       s.form.adminPassword=''; s.adminTarget=result.adminMember; go('/admin'); toast('成员资料已保存');
     }
     if (kind === 'club') {
       const result = await api.call(s.joinMode==='create'?'createClub':'joinClub', { nickname: data.nickname, name: data.name, token: data.invite.trim(), requestId: s.requestId });
-      api.setClub(result.clubId); go('/board');
+      api.setClub(result.clubId); go('/board'); if (result.department) toast('已加入'+departmentLabel(result.department));
     }
     if (kind === 'task') {
       const group=!s.id&&!s.parent&&s.steps.length>0;
@@ -280,10 +282,11 @@ root.addEventListener('click', event => {
   if (action === 'continue') { s.recovery = ''; go('/board'); return; }
   if (action === 'copyRecovery') { copy(s.recovery); return; }
   if (action === 'copyReset') { copy(s.resetLink); return; }
-  if (action === 'copyInvite') { copy(s.invite); return; }
+  if (action === 'copyInvite') { const token=invitationToken(s.invites,s.inviteDepartment); if(token) copy(token); return; }
   if (action === 'share') {
-    const url = inviteLink(s.invite);
-    if (navigator.share) navigator.share({ title: '邀请你加入 '+s.sync.board.club.name, url }).catch(error => { if (error.name!=='AbortError') copy(url); });
+    const token=invitationToken(s.invites,s.inviteDepartment); if(!token) return;
+    const url = inviteLink(token);
+    if (navigator.share) navigator.share({ title: '邀请你加入 '+s.sync.board.club.name+(s.inviteDepartment?' · '+departmentLabel(s.inviteDepartment):''), url }).catch(error => { if (error.name!=='AbortError') copy(url); });
     else copy(url);
     return;
   }
@@ -309,7 +312,13 @@ root.addEventListener('click', event => {
       const template=s.sync.board.templates.find(t=>t._id===id);
       if(template&&await confirmAction('归档这个模板？','模板将从共享模板库隐藏，已经发布的任务保持不变。')) await api.call('archiveTemplate',{templateId:id,revision:template.revision});
     }
-    if (action === 'rotateInvite' && await confirmAction('更换邀请码？','已有成员不受影响，旧邀请码和邀请链接将失效。')) { const result = await api.call('rotateInvite', { clubId: s.sync.board.club.id }); s.invite = result.token; }
+    if (action === 'rotateInvite') {
+      const department=s.inviteDepartment || '', label=department?departmentLabel(department):'社团通用';
+      if (await confirmAction('更换'+label+'邀请码？','仅此入口的旧邀请码和邀请链接将失效，其他部门邀请码及已有成员不受影响。')) {
+        await api.call('rotateInvite', { clubId: s.sync.board.club.id, department });
+        s.invites=await api.getInvite(s.sync.board);
+      }
+    }
     if (action === 'logout') { await api.logout(); go('/auth'); }
   });
 });

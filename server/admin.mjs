@@ -1,5 +1,7 @@
 import permissions from '../shared/permissions.js';
 import domain from '../shared/domain.js';
+import departments from '../shared/departments.js';
+const { validDepartment } = departments;
 const { isAdmin, canEditMember } = permissions;
 const { ClubError, safeMember, safeClub } = domain;
 const fail = (code, message) => { throw new ClubError(code, message); };
@@ -70,6 +72,9 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     }
     if (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 20) fail('VALIDATION', '社团内称呼须为1—20个字');
     const name = input.name.trim(), role = input.role;
+    // An older client omitting this field must preserve the current assignment.
+    const department = input.department === undefined ? target.department || '' : input.department;
+    if (!validDepartment(department)) fail('VALIDATION', '请选择有效的部门');
     if (!['owner','admin','member'].includes(role)) fail('VALIDATION', '请选择有效的成员角色');
     if ((target.role === 'owner' && role !== 'owner') || (target.role !== 'owner' && role === 'owner')) fail('FORBIDDEN', '创建者身份不能在此修改');
     if (role !== target.role && actor.role !== 'owner') fail('FORBIDDEN', '仅创建者可以任免管理员');
@@ -81,7 +86,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
       if (sql.exec('SELECT id FROM accounts WHERE username=? AND id<>?', login, target.identity).toArray().length) fail('CONFLICT', '这个用户名已被使用');
     }
     if (loginChanged || role !== target.role) verifyPassword(identity, input.adminPassword);
-    const fields = [name !== target.name && 'name', role !== target.role && 'role', loginChanged && 'username'].filter(Boolean);
+    const fields = [name !== target.name && 'name', role !== target.role && 'role', loginChanged && 'username', department !== (target.department || '') && 'department'].filter(Boolean);
     const club = await db.get('clubs', input.clubId), baseVersion = club.syncVersion || 0;
     if (!fields.length) return { baseVersion, version:baseVersion, club:safeClub(club), member:safeMember(target), adminMember:await entry(db,actor,target) };
     if (loginChanged) {
@@ -91,7 +96,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     }
     // Demotion cancels every outstanding reset issued with these privileges.
     if (role !== target.role) sql.exec('DELETE FROM account_resets WHERE club_id=? AND (actor_identity=? OR account_id=?)', input.clubId, target.identity, target.identity);
-    const version = baseVersion + 1, updated = { ...target, name, role, syncVersion:version };
+    const version = baseVersion + 1, updated = { ...target, name, role, department, syncVersion:version };
     const updatedClub = { ...club, syncVersion:version, membersVersion:version };
     await db.put('members', target._id, updated); await db.put('clubs', club._id, updatedClub);
     audit(input.clubId, actor, target, 'edit', fields);

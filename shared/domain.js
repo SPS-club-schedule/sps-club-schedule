@@ -1,5 +1,6 @@
 'use strict';
 const { seminarTemplate, relativeDeadline, MAX_STEPS } = require('./templates');
+const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments');
 
 // Shared by the cloud function and the local demonstration. Identity is injected
 // by the adapter; no action trusts a member ID supplied as the caller.
@@ -13,7 +14,7 @@ function text(value, label, max, optional) {
   if ((!optional && !clean) || clean.length > max) fail('VALIDATION', `${label}须为${optional ? '0' : '1'}—${max}个字`);
   return clean;
 }
-const safeMember = m => ({ id: m._id, name: m.name, role: m.role, joinedAt: m.joinedAt, syncVersion: m.syncVersion || 0 });
+const safeMember = m => ({ id: m._id, name: m.name, role: m.role, department: m.department || '', joinedAt: m.joinedAt, syncVersion: m.syncVersion || 0 });
 const safeClub = c => ({ id: c._id, name: c.name, inviteVersion: c.inviteVersion || 0 });
 
 function createService({ store, now, randomId, hash }) {
@@ -154,7 +155,7 @@ function createService({ store, now, randomId, hash }) {
         await tx.put('clubs', clubId, club);
         await seedTemplate(tx, club, 1);
         await tx.put('invites', inviteHash, { clubId, token, createdAt: now() });
-        await tx.put('members', memberKey(clubId, identity), { clubId, identity, name: nickname, role: 'owner', joinedAt: now(), syncVersion: 1 });
+        await tx.put('members', memberKey(clubId, identity), { clubId, identity, name: nickname, role: 'owner', department: '', joinedAt: now(), syncVersion: 1 });
       });
       return { clubId };
     },
@@ -166,31 +167,54 @@ function createService({ store, now, randomId, hash }) {
         const invite = await tx.get('invites', hash(token));
         if (!invite) fail('NOT_FOUND', '邀请已失效，请向社团成员获取新邀请');
         const club = await tx.get('clubs', invite.clubId);
-        if (!club || club.inviteHash !== hash(token)) fail('NOT_FOUND', '邀请已失效');
+        const department = invite.department || '';
+        if (!validDepartment(department) || !club || (department ? club.departmentInviteHashes?.[department] : club.inviteHash) !== hash(token)) fail('NOT_FOUND', '邀请已失效');
         const id = memberKey(invite.clubId, identity);
-        if (!await tx.get('members', id)) {
+        const existing = await tx.get('members', id);
+        if (department && existing?.department && existing.department !== department) fail('CONFLICT', `你已属于${departmentLabel(existing.department)}，如需调换部门请联系管理员`);
+        if (!existing || department && !existing.department) {
           const change = await stamp(tx, invite.clubId, 'members', club);
-          await tx.put('members', id, { clubId: invite.clubId, identity, name, role: 'member', joinedAt: now(), syncVersion: change.version });
+          await tx.put('members', id, { ...(existing || { clubId: invite.clubId, identity, name, role: 'member', joinedAt: now() }), department, syncVersion: change.version });
         }
-        return { clubId: invite.clubId };
+        return { clubId: invite.clubId, department: department || existing?.department || '' };
       });
     },
     async getInvite(input, identity) {
-      await member(store, input.clubId, identity);
-      const club = await store.get('clubs', input.clubId);
-      const invite = await store.get('invites', club.inviteHash);
-      return { token: invite.token, inviteVersion: club.inviteVersion || 0 };
+      return store.transaction(async tx => {
+        await member(tx, input.clubId, identity);
+        let club = await tx.get('clubs', input.clubId);
+        // Existing clubs acquire department codes on first use; their old code
+        // and all memberships remain valid. Initialization is atomic/retry-safe.
+        const hashes = { ...club.departmentInviteHashes };
+        let changed = false;
+        for (const department of DEPARTMENTS) {
+          if (hashes[department.id]) continue;
+          const token = randomId(); hashes[department.id] = hash(token); changed = true;
+          await tx.put('invites', hash(token), { clubId: input.clubId, token, department: department.id, createdAt: now() });
+        }
+        if (changed) {
+          const change = await stamp(tx, club._id, 'invite', { ...club, departmentInviteHashes: hashes });
+          club = { ...club, departmentInviteHashes: hashes, inviteVersion: change.version };
+        }
+        const invite = await tx.get('invites', club.inviteHash);
+        const departments = await Promise.all(DEPARTMENTS.map(async d => ({ ...d, token: (await tx.get('invites', hashes[d.id])).token })));
+        return { token: invite.token, departments, inviteVersion: club.inviteVersion || 0 };
+      });
     },
     async rotateInvite(input, identity) {
+      const department = input.department === undefined ? '' : input.department;
+      if (!validDepartment(department)) fail('VALIDATION', '请选择有效的部门');
       const token = randomId();
       return store.transaction(async tx => {
         const me = await member(tx, input.clubId, identity);
         if (me.role !== 'owner') fail('FORBIDDEN', '仅社团创建者可以更换邀请码');
         const club = await tx.get('clubs', input.clubId);
-        await tx.remove('invites', club.inviteHash);
-        await tx.put('invites', hash(token), { clubId: input.clubId, token, createdAt: now() });
-        const change = await stamp(tx, club._id, 'invite', Object.assign({}, club, { inviteHash: hash(token) }));
-        return Object.assign(change, { token, inviteVersion: change.club.inviteVersion });
+        const previous = department ? club.departmentInviteHashes?.[department] : club.inviteHash;
+        if (previous) await tx.remove('invites', previous);
+        await tx.put('invites', hash(token), { clubId: input.clubId, token, department, createdAt: now() });
+        const updated = department ? { ...club, departmentInviteHashes: { ...club.departmentInviteHashes, [department]: hash(token) } } : { ...club, inviteHash: hash(token) };
+        const change = await stamp(tx, club._id, 'invite', updated);
+        return Object.assign(change, { token, department, inviteVersion: change.club.inviteVersion });
       });
     },
     async renameMe(input, identity) {

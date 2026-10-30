@@ -263,3 +263,49 @@ test('failed admin password checks are rate-limited despite edit-transaction rol
   assert.equal((await post('/api',{action:'adminResetPassword',input:f.input(target)},f.creator.token)).status,429);
   assert.equal((await f.list()).events.length,0);
 });
+
+test('department registration, joining, admin edits, authorization, rotation and sync persist in SQLite',async()=>{
+  const f=await adminFixture('dept');
+  const invites=await api('getInvite',{clubId:f.clubId},f.creator.token);
+  const accounts=[];
+  for(const d of invites.departments) {
+    const registered=await register('dept_'+d.id,'join',{invite:d.token,department:'forged',role:'admin'});
+    assert.equal(registered.status,200,JSON.stringify(registered)); accounts.push(registered.data);
+    const board=await api('bootstrap',{clubId:f.clubId},registered.data.token);
+    assert.equal(board.me.department,d.id); assert.equal(board.me.role,'member');
+    assert.ok(!JSON.stringify(board).includes(d.token));
+  }
+  const before=await api('bootstrap',{clubId:f.clubId},f.member.token);
+  await api('joinClub',{token:invites.departments[1].token,nickname:'Keep original name'},f.member.token);
+  const delta=await api('sync',{clubId:f.clubId,since:before.version},f.member.token);
+  assert.equal(delta.me.department,'liaison'); assert.equal(delta.me.name,before.me.name);
+  assert.equal((await post('/api',{action:'joinClub',input:{token:invites.departments[2].token,nickname:'Wrong department'}},f.member.token)).status,409);
+  let target=await f.row(f.member);
+  for(const token of [f.member.token,owner.token]) assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(target),department:'academic'}},token)).status,403);
+  for(const department of ['unknown',null,{}]) assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(target),department}},f.creator.token)).status,400);
+  assert.equal((await f.row(f.member)).department,'liaison');
+  const edited=await api('adminEditMember',{...f.input(target),department:'academic',adminPassword:undefined},f.creator.token);
+  assert.equal(edited.member.department,'academic'); assert.equal(edited.adminMember.department,'academic');
+  assert.equal((await f.list()).events[0].fields[0],'department');
+  assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(target),department:'publicity'}},f.creator.token)).status,409);
+  // A pre-department client can still rename without erasing the assignment.
+  const renamed=await api('adminEditMember',{...f.input(edited.adminMember),name:'Department member',adminPassword:undefined},f.creator.token);
+  assert.equal(renamed.member.department,'academic');
+  const promoted=await api('adminEditMember',{...f.input(renamed.adminMember),role:'admin'},f.creator.token);
+  target=await f.row(accounts[0]);
+  await api('adminEditMember',{...f.input(target),department:'liaison',adminPassword:undefined},f.member.token);
+  const creator=(await f.list()).members.find(m=>m.role==='owner');
+  assert.equal((await post('/api',{action:'adminEditMember',input:{...f.input(creator),department:'publicity'}},f.member.token)).status,403);
+  assert.equal((await post('/api',{action:'rotateInvite',input:{clubId:f.clubId,department:'publicity'}},f.member.token)).status,403);
+  const rotated=await api('rotateInvite',{clubId:f.clubId,department:'publicity'},f.creator.token);
+  assert.equal((await post('/api',{action:'joinClub',input:{token:invites.departments[0].token,nickname:'Old code'}},accounts[0].token)).status,404);
+  const cleared=await api('adminEditMember',{...f.input(promoted.adminMember),department:'',adminPassword:undefined},f.creator.token);
+  assert.equal(cleared.member.department,'');
+  await mf.dispose(); mf=new Miniflare(options);
+  const persisted=await api('getInvite',{clubId:f.clubId},f.creator.token);
+  assert.equal(persisted.departments[0].token,rotated.token); assert.equal(persisted.token,invites.token);
+  assert.deepEqual(persisted.departments.slice(1),invites.departments.slice(1));
+  const roster=(await api('bootstrap',{clubId:f.clubId},f.member.token)).members;
+  assert.equal(roster.find(m=>m.id===target.id).department,'liaison');
+  assert.equal(roster.find(m=>m.id===cleared.member.id).department,'');
+});

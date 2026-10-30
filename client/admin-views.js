@@ -1,4 +1,5 @@
 import { isAdmin, roleLabel } from '../shared/permissions';
+import { DEPARTMENTS, departmentLabel } from '../shared/departments';
 import { parts } from '../shared/view';
 import { e, button, link, error, busy, field, syncRow, nav } from './ui';
 const date = value => value ? parts(value).date : '—';
@@ -11,12 +12,12 @@ function guard(s) {
 export function admin(s) {
   const denied=guard(s); if (denied) return denied;
   const b=s.sync.board, data=s.adminData, query=(s.search||'').trim().toLowerCase();
-  const members=(data?.members||[]).filter(m=>(m.name+' '+m.username).toLowerCase().includes(query));
+  const members=(data?.members||[]).filter(m=>(m.name+' '+m.username+' '+departmentLabel(m.department)).toLowerCase().includes(query));
   const name=id=>data.members.find(m=>m.id===id)?.name || '社团成员';
-  const labels={name:'称呼',role:'角色',username:'用户名'};
+  const labels={name:'称呼',role:'角色',username:'用户名',department:'所属部门'};
   return `<section class="page"><div class="eyebrow space">MEMBER ADMINISTRATION</div><div class="row between space"><h1 class="h1">成员与账号管理</h1><span class="pill">${roleLabel(b.me.role)}</span></div><p class="muted small space">${e(b.club.name)} · 管理成员资料与登录账号</p>${syncRow(s)}${error(s)}
-  <div class="banner space">创建者可以任免管理员；管理员可以管理普通成员。</div><div class="search-box"><input name="search" aria-label="搜索成员或用户名" placeholder="搜索成员或用户名" value="${e(s.search)}"></div>
-  ${!data?'<p class="empty">正在加载成员账号…</p>':`<div class="small muted space">${members.length} 位成员</div>${members.map(m=>`<article class="card admin-member space"><div class="row"><div class="avatar ${isAdmin(m.role)?'owner':''}">${e(m.name[0])}</div><div class="grow"><div class="row between"><strong class="wrap">${e(m.name)}${m.id===b.me.id?'（我）':''}</strong><span class="pill">${roleLabel(m.role)}</span></div><p class="small muted wrap">@${e(m.username||'无网页账号')}</p></div></div><div class="row between space"><span class="small muted">加入于 ${date(m.joinedAt)}</span>${m.canEdit?link('/admin-edit?id='+encodeURIComponent(m.id),'编辑资料 →','secondary compact'):'<span class="small muted">由创建者管理</span>'}</div></article>`).join('')||'<p class="empty">没有匹配的成员。</p>'}
+  <div class="banner space">创建者可以任免管理员；管理员可以管理普通成员及其所属部门。</div>${link('/members','获取部门邀请码 →','plain small space')}<div class="search-box"><input name="search" aria-label="搜索成员、用户名或部门" placeholder="搜索成员、用户名或部门" value="${e(s.search)}"></div>
+  ${!data?'<p class="empty">正在加载成员账号…</p>':`<div class="small muted space">${members.length} 位成员</div>${members.map(m=>`<article class="card admin-member space"><div class="row"><div class="avatar ${isAdmin(m.role)?'owner':''}">${e(m.name[0])}</div><div class="grow"><div class="row between"><strong class="wrap">${e(m.name)}${m.id===b.me.id?'（我）':''}</strong><span class="pill">${roleLabel(m.role)}</span></div><p class="small muted wrap">@${e(m.username||'无网页账号')} · ${e(departmentLabel(m.department))}</p></div></div><div class="row between space"><span class="small muted">加入于 ${date(m.joinedAt)}</span>${m.canEdit?link('/admin-edit?id='+encodeURIComponent(m.id),'编辑资料 →','secondary compact'):'<span class="small muted">由创建者管理</span>'}</div></article>`).join('')||'<p class="empty">没有匹配的成员。</p>'}
   <h2 class="h2 section">最近管理记录</h2><div class="card space">${data.events.map(event=>`<div class="admin-event"><p class="small wrap">${e(name(event.actorId))} ${event.action==='reset'?'生成密码重设链接：':'修改'+event.fields.map(f=>labels[f]||f).map(e).join('、')+'：'}${e(name(event.targetId))}</p><span class="hint">${stamp(event.at)} · 北京时间</span></div>`).join('')||'<p class="small muted">还没有管理操作。</p>'}</div>`}</section>${nav('admin',b)}`;
 }
 export function adminEditor(s) {
@@ -28,10 +29,11 @@ export function adminEditor(s) {
   return `<section class="page">${back}<div class="eyebrow section">MEMBER PROFILE</div><h1 class="h1 space">编辑成员资料</h1><p class="muted small space">${e(m.name)} · ${roleLabel(m.role)}</p>${error(s)}
   <form id="admin-member-form" data-form="adminMember" class="section"><fieldset ${busy(s)}>
   ${field('memberName','社团内称呼',f.memberName,'text','required maxlength="20" autocomplete="off"')}
+  <div class="field"><label class="label" for="memberDepartment">所属部门</label><select id="memberDepartment" name="memberDepartment"><option value="">未分配</option>${DEPARTMENTS.map(d=>`<option value="${d.id}" ${f.memberDepartment===d.id?'selected':''}>${d.name}</option>`).join('')}</select><p class="hint">使用部门邀请码加入会自动归入该部门，也可在这里调整。</p></div>
   <div class="field"><label class="label" for="memberRole">社团角色</label>${b.me.role==='owner'&&m.role!=='owner'?`<select id="memberRole" name="memberRole"><option value="member" ${f.memberRole==='member'?'selected':''}>成员</option><option value="admin" ${f.memberRole==='admin'?'selected':''}>管理员</option></select>`:`<div class="picker-value">${roleLabel(m.role)}</div>`}<p class="hint">创建者身份保留；仅创建者可以任免管理员。</p></div>
   ${field('memberUsername','登录用户名',f.memberUsername,'text',`required minlength="3" maxlength="30" pattern="[a-zA-Z0-9_]+" autocomplete="off" autocapitalize="none" ${m.canEditAccount?'':'disabled'}`)}
   ${m.accountRestriction?`<p class="hint">${e(m.accountRestriction)}；仍可维护本社团内的资料。</p>`:'<p class="hint">用户名须为3—30位字母、数字或下划线。修改后请告知成员使用新用户名登录。</p>'}
-  <div class="section">${field('adminPassword','你的密码 · 确认账号或角色变更',f.adminPassword,'password','minlength="10" maxlength="128" autocomplete="current-password" placeholder="仅修改称呼时可留空"')}</div>
+  <div class="section">${field('adminPassword','你的密码 · 确认账号或角色变更',f.adminPassword,'password','minlength="10" maxlength="128" autocomplete="current-password" placeholder="仅修改称呼或部门时可留空"')}</div>
   <div class="small muted">账号创建于 ${date(m.accountCreatedAt)} · 加入社团于 ${date(m.joinedAt)}</div>
   <button class="primary full section" type="submit" ${busy(s)}>${s.busy?'正在保存…':'保存修改'}</button>
   </fieldset></form>

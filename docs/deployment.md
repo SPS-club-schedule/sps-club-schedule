@@ -28,7 +28,7 @@ Worker 使用无第三方 Cookie 的 Bearer 会话，适用于 GitHub Pages 与 
 
 在仓库 Settings → Pages 中选择 GitHub Actions。在 Settings → Secrets and variables → Actions 的 Variables 中设置 `API_BASE_URL`，当前值为 `https://sps-schedule.folderrewind.top`。
 
-推送 `main` 后，工作流依次安装依赖、运行40项领域/同步/日历测试、12项 Workers 测试、3项网关测试、构建静态网页并部署。前端使用相对资源路径与 hash 路由，适用于 `https://<用户名>.github.io/sps-club-schedule/` 项目路径，刷新任务详情不会触发 GitHub Pages 404。
+推送 `main` 后，工作流依次安装依赖、运行领域/同步/界面测试、Workers 集成测试和网关测试、构建静态网页并部署。前端使用相对资源路径与 hash 路由，适用于 `https://<用户名>.github.io/sps-club-schedule/` 项目路径，刷新任务详情不会触发 GitHub Pages 404。
 
 本机针对正式后端构建：
 
@@ -55,3 +55,5 @@ API_BASE_URL=https://实际Worker地址 npm run build
 ## 管理功能的存储兼容性
 
 成员角色新增 `admin`，现有 `owner` 自动拥有后台权限。首次启动仅增加 `account_versions`（账号变更版本）、`account_resets`（一次性重设令牌摘要、有效期及授权来源）、`admin_audit`（不含凭据的操作记录）三张表；不修改原账号字段、Durable Object 名称或绑定，不复制或重建生产数据。密码重设继续走现有 `/auth/recover`，因此无需变更域名网关。部署时先更新原 API Worker，再发布 Pages 前端。回滚旧前端和 Worker 不会删除新增表或已有账号，但旧版本没有管理功能。
+
+部门功能在现有 JSON 记录中新增成员 `department`、社团 `departmentInviteHashes` 和邀请 `department` 字段，不增加 SQL 表或更换数据库位置。首次读取邀请码时，在同一个事务中生成缺少的三个部门邀请，并更新邀请同步版本；通用邀请码保持有效。旧成员缺少部门字段时按未分配读取；旧版管理客户端省略部门字段时保留当前部门。部署顺序仍为先 Worker、后 Pages。若回滚到不支持部门的旧 Worker，部门邀请将不可用，应同时恢复旧前端并使用原通用邀请码。
