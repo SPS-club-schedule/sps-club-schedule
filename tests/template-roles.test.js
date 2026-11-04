@@ -4,7 +4,10 @@ const crypto = require('node:crypto');
 const { createService } = require('../shared/domain');
 const { createMemoryStore } = require('../shared/memory-store');
 const { seminarTemplate, templateDraft } = require('../shared/templates');
-const { resolveParticipants, setRole, setFollowMain, removeRole, toggleParticipant, chooseDepartment } = require('../shared/assignments');
+const { resolveParticipants, setRole, setRoles, setFollowMain, removeRole, toggleParticipant, chooseDepartment } = require('../shared/assignments');
+
+const { selectedRoleIds } = require('../shared/role-bindings');
+const { resolveGuestNames } = require('../shared/guest-assignments');
 
 const roles=[{id:'speaker',name:'主讲人'},{id:'assistant',name:'助教'},{id:'poster',name:'海报制作人'}];
 const roleTemplate=()=>({...seminarTemplate(),roles:structuredClone(roles),steps:seminarTemplate().steps.map((step,i)=>({...step,roleId:['assistant','poster','poster','assistant','speaker'][i]}))});
@@ -118,5 +121,83 @@ test('role editor and picker escape shared content, show usage and preserve the 
   for (const html of [editor,picker,steps]) { assert.ok(!html.includes('<img'));assert.ok(html.includes('&lt;img')); }
   assert.match(editor,/模板角色.*3/); assert.match(editor,/data-action="removeRole"/);
   assert.match(picker,/关联 2 项：/); assert.match(picker,/data-action="roleParticipant"/);
-  assert.match(steps,/<option value="poster" selected>/); assert.match(steps,/按角色分配/);
+  assert.match(steps,/data-action="stepRole" data-index="1" data-id="poster" aria-pressed="true"/); assert.match(steps,/负责角色（可多选）/); assert.match(steps,/按角色分配/);
+});
+
+test('joint role bindings survive save, copy, sync and reorder; old clients cannot erase them',async()=>{
+  const f=await fixture(), before=await f.board(), steps=roleTemplate().steps;
+  steps[0]={...steps[0],roleId:'',roleIds:['assistant','poster']};
+  let t=(await f.create({steps})).template;
+  assert.deepEqual(t.steps[0].roleIds,['assistant','poster']);
+  assert.deepEqual((await f.run('sync',{clubId:f.clubId,since:before.version},'owner')).templates[0].steps[0].roleIds,t.steps[0].roleIds);
+  const copy=(await f.run('createTemplate',{...t,requestId:'joint-role-copy'},'owner')).template;
+  t=(await f.run('editTemplate',{...t,templateId:t._id,roles:[roles[2],{...roles[1],name:'协调人'},roles[0]],steps:[...t.steps].reverse()},'owner')).template;
+  assert.deepEqual(t.steps[4].roleIds,['assistant','poster']);
+  assert.equal(copy.roles[1].name,'助教');
+  const oldSteps=t.steps.map(({roleIds,...step})=>step);
+  await assert.rejects(f.run('editTemplate',{...t,templateId:t._id,steps:oldSteps},'owner'),{code:'CONFLICT'});
+  await assert.rejects(f.run('createTaskGroup',{...f.group(),templateId:t._id,subtasks:oldSteps},'owner'),{code:'CONFLICT'});
+  const draft=templateDraft(t,(await f.board()).members);
+  draft.steps[4].roleIds.push('speaker');
+  assert.deepEqual(t.steps[4].roleIds,['assistant','poster']);
+  t=(await f.run('editTemplate',{...t,templateId:t._id,steps:t.steps.map(step=>({...step,roleIds:[],roleId:''}))},'owner')).template;
+  assert.ok(t.steps.every(step=>selectedRoleIds(step).length===0));
+});
+
+test('joint roles publish the deduplicated union and require a person for every selected role',async()=>{
+  const f=await fixture(), input=f.group();
+  input.subtasks[0]={...input.subtasks[0],roleId:'',roleIds:['assistant','poster','speaker']};
+  const before=f.store.snapshot();
+  const missing={...input,roles:input.roles.map(role=>({...role,participantIds:role.id==='poster'?[]:role.participantIds}))};
+  await assert.rejects(f.run('createTaskGroup',missing,'owner'),error=>error.code==='VALIDATION'&&error.message.includes('海报制作人'));
+  assert.deepEqual(f.store.snapshot(),before);
+  const result=await f.run('createTaskGroup',input,'owner');
+  assert.deepEqual(result.tasks[1].participantIds,[f.ids.alice,f.ids.bob,f.ids.owner]);
+  assert.ok(result.tasks.every(task=>!('roleIds' in task)&&!('roleId' in task)));
+  input.roles[1].participantIds=[];
+  assert.deepEqual((await f.run('createTaskGroup',input,'owner')).tasks,result.tasks);
+});
+
+test('invalid joint role bindings fail atomically, including contradictory legacy fields',async()=>{
+  const f=await fixture(),before=f.store.snapshot(),step=roleTemplate().steps[0];
+  for(const patch of [
+    {roleIds:null},{roleIds:'assistant'},{roleIds:[null]},{roleIds:['']},
+    {roleIds:['assistant','missing']},{roleIds:Array(21).fill('assistant')},
+    {roleIds:['assistant','poster'],followMain:true},
+    {roleIds:['assistant','poster'],participantDepartment:'publicity'},
+    {roleIds:['assistant','poster'],roleId:'speaker'},
+    {roleIds:[],roleId:'assistant'}
+  ]) {
+    const joint={...step,roleId:'',...patch};
+    await assert.rejects(f.create({steps:[joint]}),{code:'VALIDATION'});
+    await assert.rejects(f.run('createTaskGroup',{...f.group(),subtasks:[joint]},'owner'),{code:'VALIDATION'});
+  }
+  await assert.rejects(f.create({roleIds:['assistant']}),{code:'VALIDATION'});
+  assert.deepEqual(f.store.snapshot(),before);
+});
+
+test('joint draft assignments keep remaining roles live and preserve the union when changed to manual',()=>{
+  const roster=[{id:'a'},{id:'b'},{id:'c'}],form={roles:[
+    {id:'core',name:'协调人',participantIds:['a','b']},
+    {id:'guest',name:'嘉宾',coreMember:false,participantIds:['c'],guestNames:'张老师\n李老师'},
+    {id:'guest2',name:'助讲',coreMember:false,participantIds:['c'],guestNames:'张老师\n王老师'}
+  ]},step={participantIds:[]};
+  setRoles(step,['core','guest','guest2'],form,roster);
+  assert.deepEqual(resolveParticipants(step,roster,form),['a','b','c']);
+  assert.deepEqual(resolveGuestNames(step,form),['张老师','李老师','王老师']);
+  setFollowMain(step,false,form,roster);
+  assert.deepEqual(selectedRoleIds(step),[]);
+  assert.deepEqual(step.participantIds,['a','b','c']);
+  assert.equal(step.guestNames,'张老师\n李老师\n王老师');
+  setRoles(step,['core','guest'],form,roster);
+  removeRole(form,[step],'core',roster);
+  assert.deepEqual(selectedRoleIds(step),['guest']);
+  form.roles[0].participantIds=[];
+  assert.deepEqual(resolveParticipants(step,roster,form),[]);
+  removeRole(form,[step],'guest',roster);
+  assert.deepEqual(selectedRoleIds(step),[]);
+  assert.equal(step.guestNames,'张老师\n李老师');
+  for(const change of [()=>chooseDepartment(step,'',roster),()=>toggleParticipant(step,'b',roster,form),()=>setFollowMain(step,true,form,roster)]) {
+    setRoles(step,['guest2'],form,roster);change();assert.deepEqual(selectedRoleIds(step),[]);
+  }
 });

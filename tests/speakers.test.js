@@ -113,10 +113,10 @@ test('registered speakers can complete their own tasks and core members can prox
   await assert.rejects(f.run('complete',{taskId:task._id,participantId:guest.id,done:false},'alice'),{code:'FORBIDDEN'});
   await f.run('complete',{taskId:task._id,done:false},'bob');
 });
-test('guest and role validation rejects malformed names, missing people and mixing core and speaker identities',async()=>{
+test('guest and role validation rejects malformed names, missing people and non-members in member-only roles',async()=>{
   const f=await fixture();assert.deepEqual(guestNames(' 张老师\n\n张老师\n李老师 '),['张老师','李老师']);
   for(const value of [[],42,'x'.repeat(41),Array.from({length:51},(_,i)=>'Guest '+i).join('\n')])assert.throws(()=>guestNames(value));
-  for(const patch of [{coreMember:true,guestNames:'张老师'},{coreMember:true,guestNames:'',participantIds:[f.ids.speaker]},{coreMember:false,guestNames:'',participantIds:[f.ids.alice]},{coreMember:false,guestNames:'',participantIds:[]}])await assert.rejects(f.publish({roles:[{id:'speaker',name:'主讲人',participantIds:[],...patch}]}),{code:'VALIDATION'});
+  for(const patch of [{coreMember:true,guestNames:'张老师'},{coreMember:true,guestNames:'',participantIds:[f.ids.speaker]},{coreMember:false,guestNames:'',participantIds:[]}])await assert.rejects(f.publish({roles:[{id:'speaker',name:'主讲人',participantIds:[],...patch}]}),{code:'VALIDATION'});
 });
 test('speaker views omit creation and management controls; guest names and proxy actor labels are escaped',async()=>{
   const f=await fixture(),group=await f.publish({roles:[{id:'speaker',name:'主讲人',coreMember:false,participantIds:[],guestNames:'<img src=x onerror=alert(1)>'}]}),child=group.tasks[1];
@@ -125,4 +125,65 @@ test('speaker views omit creation and management controls; guest names and proxy
   const state={sync:{phase:'ready',board:await f.board()},id:child._id,form:{},search:'',filter:'all'};
   const detail=views.detail(state);assert.ok(detail.includes('&lt;img'));assert.ok(!detail.includes('<img'));assert.ok(detail.includes('由 bob 代'));
   state.sync.board=await f.board('speaker');const board=views.board(state,true);assert.ok(!board.includes('发布任务'));assert.ok(!board.includes('href="#/templates"'));assert.ok(!board.includes('新手指南'));assert.ok(!board.includes('预约总览'));
+});
+
+
+test('core and multiple guest roles can share a step with deduplicated people and completion progress',async()=>{
+  const f=await fixture(),roles=[
+    {id:'core',name:'协调人',participantIds:[f.ids.alice]},
+    {id:'speaker',name:'主讲人',coreMember:false,participantIds:[f.ids.speaker],guestNames:'张老师\n李老师'},
+    {id:'assistant',name:'助讲',coreMember:false,participantIds:[f.ids.speaker],guestNames:'张老师\n王老师'}
+  ];
+  const result=await f.publish({roles,subtasks:[{...f.template.steps[0],roleId:'',roleIds:['core','speaker','assistant']}]});
+  const child=result.tasks[1];
+  assert.deepEqual(child.participantIds,[f.ids.alice,f.ids.speaker]);
+  assert.deepEqual(child.guestParticipants.map(person=>person.name),['张老师','李老师','王老师']);
+  assert.equal(taskView(child,await f.board()).total,5);
+  assert.ok(!('roleIds' in child));
+  await f.run('complete',{taskId:child._id,done:true},'alice');
+  const saved=(await f.board()).tasks.find(task=>task._id===child._id);
+  assert.equal(Object.keys(saved.completions).length,1);
+  assert.equal(taskView(saved,await f.board()).done,false);
+});
+
+test('speaker roles accept members from every department alongside guests without changing account permissions',async()=>{
+  const f=await fixture(),departments=['academic','publicity','liaison'];
+  for(const department of departments)await f.run('joinClub',{token:f.invites.departments.find(d=>d.id===department).token,nickname:department},'talker_'+department);
+  const before=await f.board(),members=departments.map(department=>before.members.find(member=>member.department===department));
+  const role={id:'speaker',name:'主讲人',coreMember:false,participantIds:[...members.map(member=>member.id),f.ids.speaker],guestNames:'张老师'};
+  const group=await f.publish({roles:[role]}),child=group.tasks[1];
+  assert.deepEqual(child.participantIds,role.participantIds);
+  assert.equal(taskView(child,await f.board()).total,5);
+  assert.deepEqual((await f.board()).members,before.members);
+  await assert.rejects(f.run('complete',{taskId:child._id,participantId:members[0].id,done:true},'bob'),{code:'FORBIDDEN'});
+  await f.run('complete',{taskId:child._id,done:true},'talker_academic');
+  for(const department of departments){
+    const result=await f.publish({roles:[{...role,participantIds:[],participantDepartment:department,guestNames:''}]});
+    assert.deepEqual(result.tasks[1].participantIds,[members.find(member=>member.department===department).id]);
+  }
+  const snapshot=f.store.snapshot();
+  await assert.rejects(f.publish({roles:[{...role,participantIds:['foreign-member']}]}),{code:'VALIDATION'});
+  assert.deepEqual(f.store.snapshot(),snapshot);
+});
+
+test('speaker role picker offers all department members and the non-member speaker category',async()=>{
+  const bundle=buildSync({entryPoints:['client/template-views.js'],bundle:true,format:'esm',write:false});
+  const views=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+  const members=[
+    {id:'a',name:'学术部员',department:'academic',role:'member'},
+    {id:'p',name:'宣传部员',department:'publicity',role:'member'},
+    {id:'l',name:'联络部员',department:'liaison',role:'member'},
+    {id:'s',name:'非部员主讲人',department:'speaker',role:'speaker'}
+  ];
+  const form={roles:[{id:'talker',name:'主讲人',coreMember:false,participantIds:['a']}],participantIds:[]};
+  const state={form,steps:[],editBoard:{members,templates:[]}};
+  const html=views.roleEditors(state);
+  for(const member of members){assert.ok(html.includes(member.name));assert.ok(html.includes(`data-id="${member.id}"`));}
+  for(const label of ['学术部 · 1 人','宣传部 · 1 人','联络部 · 1 人','主讲人 · 1 人'])assert.ok(html.includes(label));
+  assert.ok(html.includes('“主讲人”分类用于非部员'));
+  assert.match(html,/data-id="a" aria-pressed="true"/);
+  assert.match(views.roleEditors(state,true),/负责人范围/);
+  form.roles[0].coreMember=true;
+  const restricted=views.roleEditors(state);
+  assert.ok(restricted.includes('学术部员'));assert.ok(!restricted.includes('非部员主讲人'));assert.ok(!restricted.includes('免注册负责人姓名'));
 });

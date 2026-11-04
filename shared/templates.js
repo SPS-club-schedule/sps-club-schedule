@@ -3,6 +3,7 @@ const MAX_STEPS = 20;
 const MAX_ROLES = 20;
 const { parseDeadline } = require('./view');
 const { resolveParticipants } = require('./assignments');
+const { roleBindingFields } = require('./role-bindings');
 const { normalizeStepDependencies } = require('./step-dependencies');
 const { schedulingMode, planningFields, draftPlanningFields, computeStepSchedule } = require('./backward-schedule');
 function seminarTemplate() {
@@ -24,7 +25,7 @@ function relativeDeadline(mainDueAt, daysBefore) {
 function templateDraft(template, members) {
   const ids = new Set(members.map(m => m.id));
   const copy = item => ({ title: item.title, description: item.description, mode: item.mode, priority: item.priority, participantDepartment: item.participantDepartment || '', participantIds: resolveParticipants({ ...item, followMain: false }, members).filter(id => ids.has(id)) });
-  return { ...copy(template), schedulingMode:schedulingMode(template.schedulingMode), roles:(template.roles || []).map(role=>({id:role.id,name:role.name,coreMember:role.coreMember!==false,guestNames:'',participantIds:[],participantDepartment:''})), durationMinutes:template.durationMinutes ?? null, steps: normalizeStepDependencies(template.steps).map(step => ({ ...copy(step), ...planningFields(step), estimateDays:step.estimateMinutes==null?'':step.estimateMinutes/1440, id:step.id, dependsOn:step.dependsOn, roleId:step.roleId || '', followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
+  return { ...copy(template), schedulingMode:schedulingMode(template.schedulingMode), roles:(template.roles || []).map(role=>({id:role.id,name:role.name,coreMember:role.coreMember!==false,guestNames:'',participantIds:[],participantDepartment:''})), durationMinutes:template.durationMinutes ?? null, steps: normalizeStepDependencies(template.steps).map(step => ({ ...copy(step), ...planningFields(step), estimateDays:step.estimateMinutes==null?'':step.estimateMinutes/1440, id:step.id, dependsOn:step.dependsOn, ...roleBindingFields(step), followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
 }
 function draftSchedule(main, steps, mainDueAt=parseDeadline(main.date,main.time)) {
   return computeStepSchedule(mainDueAt,steps.map(step=>({...step,...draftPlanningFields(step,main.schedulingMode==='backward'),dueAt:step.customDeadline?parseDeadline(step.date,step.time):undefined})),main.schedulingMode);

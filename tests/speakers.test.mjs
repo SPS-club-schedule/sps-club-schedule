@@ -62,3 +62,21 @@ test('demotion prunes the old board, promotion restores older tasks, and identit
   await role(member,'member','academic');
   const restored=await api('sync',{clubId,since:after.version},member);assert.equal(restored.full,true);assert.ok(restored.tasks.some(t=>t._id===group.tasks[1]._id));assert.ok(restored.templates.length>0);
 });
+
+test('speaker roles publish all three department rosters and mixed members persist across SQLite restart',async()=>{
+  const input={...fields,clubId,templateId:template._id,participantIds:[ids.owner],dueAt:Date.now()+10*86400000,subtasks:template.steps};
+  for(const department of ['academic','publicity','liaison']){
+    await role(member,'member',department);
+    const result=await api('createTaskGroup',{...input,requestId:'speaker-department-'+department,roles:[{...template.roles[0],participantIds:[],participantDepartment:department}]});
+    assert.deepEqual(result.tasks[1].participantIds,[ids.member]);
+  }
+  const mixed=await api('createTaskGroup',{...input,requestId:'speaker-department-mixed',roles:[{...template.roles[0],participantIds:[ids.member,ids.speaker],guestNames:'免注册李老师'}]});
+  await mf.dispose();mf=new Miniflare(options);
+  const board=await api('bootstrap',{clubId},member),saved=board.tasks.find(task=>task._id===mixed.tasks[1]._id);
+  assert.deepEqual(saved.participantIds,[ids.member,ids.speaker]);
+  assert.equal(saved.guestParticipants[0].name,'免注册李老师');
+  assert.equal(board.me.role,'member');assert.equal(board.me.department,'liaison');
+  assert.equal((await api('bootstrap',{clubId},speaker)).me.role,'speaker');
+  assert.equal((await post('/api',{action:'complete',input:{taskId:saved._id,participantId:ids.member,done:true}})).status,403);
+  await api('complete',{taskId:saved._id,done:true},member);
+});

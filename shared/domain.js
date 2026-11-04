@@ -3,6 +3,7 @@ const { seminarTemplate, MAX_STEPS, MAX_ROLES } = require('./templates');
 const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments');
 const { isAdmin, isSpeaker, isCoreMember } = require('./permissions');
 const { resolveParticipants } = require('./assignments');
+const { selectedRoleIds } = require('./role-bindings');
 const {resolveGuestNames,participantKeys,canProxyFor}=require('./guest-assignments');
 const { validDurationMinutes } = require('./template-duration');
 const { normalizeStepDependencies } = require('./step-dependencies');
@@ -73,25 +74,30 @@ function createService({ store, now, randomId, hash }) {
   }
   function requireCore(me) {if(!isCoreMember(me.role))fail('FORBIDDEN','主讲人只能查看并完成分配给自己的任务');}
   function canManage(task, me) { return isCoreMember(me.role)&&(task.creatorId === me._id || task.parentCreatorId === me._id || me.role === 'owner'); }
-  function assignment(input, roster, { optional = false, template = false, main = null, roles = [], coreOnly = false, speakersOnly = false } = {}) {
+  function assignment(input, roster, { optional = false, template = false, main = null, roles = [], coreOnly = false } = {}) {
     if (!['individual', 'shared'].includes(input.mode)) fail('VALIDATION', '请选择完成方式');
     const department = input.participantDepartment === undefined ? '' : input.participantDepartment;
     if (!validDepartment(department)) fail('VALIDATION', '请选择有效的负责部门');
     if (input.followMain !== undefined && typeof input.followMain !== 'boolean') fail('VALIDATION', '请选择有效的负责人设置');
     if (input.followMain && (!main || department)) fail('VALIDATION', '仅子任务可跟随主任务负责人，且不能同时指定部门');
     const roleId = input.roleId === undefined ? '' : input.roleId;
-    if (typeof roleId !== 'string' || (roleId && (!main || !roles.some(role=>role.id===roleId)))) fail('VALIDATION', '请选择模板中已有的角色');
-    if (roleId && (department || input.followMain)) fail('VALIDATION', '按角色分配不能同时跟随主任务或指定部门');
+    if (typeof roleId !== 'string' || (input.roleIds !== undefined && (!Array.isArray(input.roleIds) || input.roleIds.length > MAX_ROLES || input.roleIds.some(id=>typeof id!=='string' || !id)))) fail('VALIDATION', '请选择模板中已有的角色');
+    const roleIds=selectedRoleIds(input);
+    if (roleId && input.roleIds !== undefined && (roleIds.length!==1 || roleIds[0]!==roleId)) fail('VALIDATION','负责角色设置不一致，请重新选择');
+    if (roleIds.length && (!main || roleIds.some(id=>!roles.some(role=>role.id===id)))) fail('VALIDATION','请选择模板中已有的角色');
+    if (roleIds.length && (department || input.followMain)) fail('VALIDATION', '按角色分配不能同时跟随主任务或指定部门');
     if (!Array.isArray(input.participantIds) || input.participantIds.length > 200) fail('VALIDATION', '负责人名单格式无效或超过200人');
-    const participantIds = template && (department || input.followMain || roleId) ? [] : [...new Set(resolveParticipants(input, roster, main ? {...main, roles} : null))];
+    const participantIds = template && (department || input.followMain || roleIds.length) ? [] : [...new Set(resolveParticipants(input, roster, main ? {...main, roles} : null))];
     let guests=[];
     try{guests=template?[]:resolveGuestNames(input,main?{...main,roles}:null);}catch(error){fail('VALIDATION',error.message);}
-    if(coreOnly&&(guests.length||participantIds.some(id=>isSpeaker(roster.find(m=>m._id===id)?.role))))fail('VALIDATION','核心成员角色只能选择社团成员，不能填写免注册姓名或选择主讲人');
-    if(speakersOnly&&participantIds.some(id=>!isSpeaker(roster.find(m=>m._id===id)?.role)))fail('VALIDATION','非核心角色请选择已注册主讲人，或直接填写免注册姓名');
-    if (!optional && roleId && !participantIds.length&&!guests.length) fail('VALIDATION', `请为角色「${roles.find(role=>role.id===roleId).name}」选择负责人或填写姓名`);
+    if(coreOnly&&(guests.length||participantIds.some(id=>isSpeaker(roster.find(m=>m._id===id)?.role))))fail('VALIDATION','此角色仅限社团部员，请调整负责人范围后再添加非部员或免注册姓名');
+    if (!optional) for (const id of roleIds) {
+      const role=roles.find(role=>role.id===id);
+      if (!resolveParticipants(role,roster).length && !(role.coreMember===false && resolveGuestNames(role).length)) fail('VALIDATION', `请为角色「${role.name}」选择负责人或填写姓名`);
+    }
     if ((!optional && !participantIds.length&&!guests.length) || participantIds.length+guests.length > 200) fail('VALIDATION', department ? `${departmentLabel(department)}须有1—200位参与者才能分配任务` : '请为每项任务选择或填写1—200位负责人');
     if (participantIds.some(id => !roster.some(m => m._id === id))) fail('VALIDATION', '注册负责人必须属于当前社团');
-    return { mode: input.mode, participantIds, ...(guests.length?{guestParticipants:guests.map(name=>({id:'guest_'+hash(name).slice(0,24),name}))}:{}), ...(template ? { participantDepartment: department, ...(main ? { followMain: input.followMain === true, roleId } : {}) } : {}) };
+    return { mode: input.mode, participantIds, ...(guests.length?{guestParticipants:guests.map(name=>({id:'guest_'+hash(name).slice(0,24),name}))}:{}), ...(template ? { participantDepartment: department, ...(main ? { followMain: input.followMain === true, roleId:roleIds.length===1?roleIds[0]:'', ...(roleIds.length>1?{roleIds}:{}) } : {}) } : {}) };
   }
   function templateRoles(input) {
     if (input === undefined) return [];
@@ -113,6 +119,9 @@ function createService({ store, now, randomId, hash }) {
   function dependencySteps(steps, previous = null) {
     // Old editors discard IDs and relations; never silently erase saved dependencies.
     if (previous?.steps.some(step=>step.dependsOn?.length) && steps.some(step=>step?.id===undefined || step?.dependsOn===undefined)) fail('CONFLICT','此模板已设置子任务依赖，请刷新页面后重新编辑或套用');
+    // Old clients understand only roleId; do not let them silently erase a joint assignment.
+    const jointlyAssigned=new Set((previous?.steps || []).filter(step=>selectedRoleIds(step).length>1).map(step=>step.id));
+    if (jointlyAssigned.size && steps.some(step=>step?.id===undefined || jointlyAssigned.has(step.id)&&step.roleIds===undefined)) fail('CONFLICT','此模板已设置多个角色共同负责，请刷新页面后重新编辑或套用');
     try { return normalizeStepDependencies(steps); }
     catch (error) { fail('VALIDATION',error.message); }
   }
@@ -129,7 +138,7 @@ function createService({ store, now, randomId, hash }) {
     if (!Array.isArray(input.steps) || !input.steps.length || input.steps.length > MAX_STEPS) fail('VALIDATION', `模板须包含1—${MAX_STEPS}项子任务`);
     // Old editors cannot safely match reordered steps to their role bindings.
     if (input.roles === undefined && previous?.roles?.length) fail('CONFLICT','此模板已设置角色分工，请刷新页面后重新编辑');
-    if(previous?.roles?.some(role=>role.coreMember===false&&input.roles?.some(next=>next.id===role.id&&next.coreMember===undefined)))fail('CONFLICT','此模板包含非核心成员角色，请刷新后重新编辑');
+    if(previous?.roles?.some(role=>role.coreMember===false&&input.roles?.some(next=>next.id===role.id&&next.coreMember===undefined)))fail('CONFLICT','此模板包含可由非部员担任的角色，请刷新后重新编辑');
     const roles=templateRoles(input.roles);
     const schedulingMode=planningMode(input,previous);
     const main = assignment(input, roster, { optional: true, template: true });
@@ -385,7 +394,7 @@ function createService({ store, now, randomId, hash }) {
         if (input.parentTaskId) fail('VALIDATION', '模板只能用于创建主任务');
         if (!Array.isArray(input.subtasks) || !input.subtasks.length || input.subtasks.length > MAX_STEPS) fail('VALIDATION', `请保留1—${MAX_STEPS}项子任务`);
         const roster = await activeMembers(tx, { clubId: input.clubId });
-        const roles=templateRoles(input.roles).map((role,index)=>({ ...role, ...assignment({...input.roles[index],mode:'individual'},roster,{optional:true,coreOnly:role.coreMember!==false,speakersOnly:role.coreMember===false}),guestNames:input.roles[index].guestNames || '', participantDepartment:input.roles[index].participantDepartment || '' }));
+        const roles=templateRoles(input.roles).map((role,index)=>({ ...role, ...assignment({...input.roles[index],mode:'individual'},roster,{optional:true,coreOnly:role.coreMember!==false}),guestNames:input.roles[index].guestNames || '', participantDepartment:input.roles[index].participantDepartment || '' }));
         const fields = { ...content(input), ...assignment(input, roster), ...schedule(input) };
         const {dueAt}=fields;
         let sourceTemplate, template;
@@ -393,7 +402,7 @@ function createService({ store, now, randomId, hash }) {
           template = await tx.get('templates', input.templateId);
           if (!template || template.clubId !== input.clubId) fail('NOT_FOUND', '模板不属于当前社团');
           if (template.archived) fail('ARCHIVED', '模板已归档，请选择其他模板');
-          if(template.roles?.some(role=>role.coreMember===false&&input.roles?.some(next=>next.id===role.id&&next.coreMember===undefined)))fail('CONFLICT','此模板包含非核心成员角色，请刷新后重新套用');
+          if(template.roles?.some(role=>role.coreMember===false&&input.roles?.some(next=>next.id===role.id&&next.coreMember===undefined)))fail('CONFLICT','此模板包含可由非部员担任的角色，请刷新后重新套用');
           sourceTemplate = { id: template._id, name: template.name };
         }
         const steps=dependencySteps(input.subtasks,template);

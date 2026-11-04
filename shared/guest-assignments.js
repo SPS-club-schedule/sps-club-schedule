@@ -1,4 +1,5 @@
 const {isSpeaker}=require('./permissions');
+const {selectedRoleIds}=require('./role-bindings');
 function guestNames(value='') {
   if(typeof value!=='string'||value.length>10000)throw new Error('免注册姓名格式无效');
   const names=[...new Set(value.split(/\r?\n/).map(name=>name.trim()).filter(Boolean))];
@@ -6,7 +7,8 @@ function guestNames(value='') {
   return names;
 }
 function resolveGuestNames(item,main) {
-  if(item.roleId){const role=main?.roles?.find(role=>role.id===item.roleId);return role?.coreMember===false?guestNames(role.guestNames):[];}
+  const roleIds=selectedRoleIds(item);
+  if(roleIds.length)return [...new Set(roleIds.flatMap(id=>{const role=main?.roles?.find(role=>role.id===id);return role?.coreMember===false?guestNames(role.guestNames):[];}))];
   if(item.followMain)return main?resolveGuestNames(main):[];
   return guestNames(item.guestNames??item.guestParticipants?.map(person=>person.name).join('\n'));
 }
