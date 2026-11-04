@@ -18,7 +18,7 @@ async function api(action,input,token) {
 const attempt=(action,input,token)=>post('/api',{action,input},token);
 const read=async account=>(await api('accountSettings',{},account.token)).account;
 async function register(username,invite) {
-  const response=await post('/auth/register',{username,password,nickname:username,mode:invite?'join':'create',name:'Account settings',invite});
+  const response=await post('/auth/register',{username,email:username+'@example.test',password,nickname:username,mode:invite?'join':'create',name:'Account settings',invite});
   assert.equal(response.status,200,JSON.stringify(response)); return response.data;
 }
 async function fixture(prefix) {
@@ -42,7 +42,7 @@ test('all authenticated members can manage only their own account, independent o
   for(const action of ['accountSettings','accountChangeUsername','accountChangePassword']) assert.equal((await attempt(action,{})).status,401);
   const info=await api('accountSettings',{accountId:f.owner.user.id,identity:f.owner.user.id},f.member.token);
   assert.equal(info.account.username,f.member.user.username);
-  assert.deepEqual(Object.keys(info.account).sort(),['createdAt','revision','username']);
+  assert.deepEqual(Object.keys(info.account).sort(),['createdAt','email','emailVerificationExpiresAt','emailVerified','revision','username']);
   assert.ok(!JSON.stringify(info).includes(f.member.recoveryCode));
   const result=await api('accountChangeUsername',{revision:info.account.revision,username:'self_new',currentPassword:password,accountId:f.owner.user.id,identity:f.owner.user.id,role:'owner'},f.member.token);
   assert.equal(result.currentUser.id,f.member.user.id); assert.equal(result.account.username,'self_new');

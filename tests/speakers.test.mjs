@@ -15,7 +15,7 @@ before(async()=>{
   const bundle=await build({entryPoints:['server/worker.mjs'],bundle:true,format:'esm',platform:'neutral',external:['cloudflare:workers','node:*'],write:false});
   rawOptions={modules:[{type:'ESModule',path:'worker.mjs',contents:bundle.outputFiles[0].text}],compatibilityDate:'2026-07-01',compatibilityFlags:['nodejs_compat'],durableObjects:{CLUB_SERVICE:{className:'ClubService',useSQLite:true}},durableObjectsPersist:directory,bindings:{ALLOWED_ORIGINS:'https://site.test',REGISTRATION_OPEN:'true'}};
   options=convertV4MiniflareOptions(rawOptions);options.resourcePersistencePath=directory;mf=new Miniflare(options);
-  const register=async(username,extra)=>{const result=await post('/auth/register',{username,nickname:username,password,...extra},null);assert.equal(result.status,200,JSON.stringify(result));return result.data;};
+  const register=async(username,extra)=>{const result=await post('/auth/register',{username,email:username+'@example.test',nickname:username,password,...extra},null);assert.equal(result.status,200,JSON.stringify(result));return result.data;};
   owner=await register('speaker_owner',{mode:'create',name:'Speaker test'});clubId=owner.clubId;
   rawOptions.bindings.EXPERIENCE_CLUB_ID=clubId;options=convertV4MiniflareOptions(rawOptions);options.resourcePersistencePath=directory;await mf.setOptions(options);
   const invites=await api('getInvite',{clubId});

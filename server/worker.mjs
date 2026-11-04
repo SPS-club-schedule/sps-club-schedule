@@ -6,6 +6,8 @@ import { createAdminService, bumpAccountRevision } from './admin.mjs';
 import { createAccountService } from './account.mjs';
 import { createBookingSync, authorized } from './booking-sync.mjs';
 import { createExperienceService } from './experience.mjs';
+import { createMailService } from './mail.mjs';
+import emailHelpers from '../shared/email.js';
 const { createService, ClubError } = domain;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const random = () => randomBytes(32).toString('hex');
@@ -69,9 +71,10 @@ export class ClubService extends DurableObject {
     CREATE INDEX IF NOT EXISTS sessions_account ON sessions(account_id);
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
     CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);`);
+    this.mail = createMailService({sql:this.sql,store:this.store,env});
     this.run = createService({ store: this.store, now: Date.now, hash, randomId: () => randomBytes(16).toString('hex') });
     this.admin = createAdminService({ store:this.store, sql:this.sql, hash, random, username, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'admin-password') });
-    this.account = createAccountService({ store:this.store, sql:this.sql, hash, random, username, password, passwordHash, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'account-password') });
+    this.account = createAccountService({ store:this.store, sql:this.sql, hash, random, username, password, passwordHash, mail:this.mail, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'account-password') });
   }
   verifyPassword(id, pass, limitPrefix) {
     const row = this.sql.exec('SELECT salt,password_hash FROM accounts WHERE id=?', id).toArray()[0];
@@ -88,7 +91,7 @@ export class ClubService extends DurableObject {
   session(account) {
     const token = random(), expiresAt = Date.now() + SESSION_AGE;
     this.sql.exec('INSERT INTO sessions VALUES(?,?,?)', hash(token), account.id, expiresAt);
-    return { token, expiresAt, user: { id: account.id, username: account.username } };
+    return { token, expiresAt, user:this.mail.publicUser(account) };
   }
   authenticate(request) {
     const bearer = request.headers.get('Authorization') || '';
@@ -110,6 +113,8 @@ export class ClubService extends DurableObject {
       if (this.env.REGISTRATION_OPEN !== 'true') fail('FORBIDDEN', '当前暂不接受新账号');
       this.limit('register:' + ip, 30, 3600000);
       const name = username(data.username), pass = password(data.password);
+      let email;try{email=emailHelpers.normalizeEmail(data.email);}catch(error){fail('VALIDATION',error.message);}
+      this.limit('email-target:'+hash(email.toLowerCase()),5,3600000);
       if (!['join', 'create'].includes(data.mode)) fail('VALIDATION', '请选择加入或创建社团');
       if (this.sql.exec('SELECT id FROM accounts WHERE username=?', name).toArray().length) fail('CONFLICT', '这个用户名已被使用');
       const account = { id: random(), username: name }, salt = random(), recoveryCode = random();
@@ -121,6 +126,7 @@ export class ClubService extends DurableObject {
           nickname: data.nickname, name: data.name, token: data.invite,
           requestId: 'register_' + account.id
         }, account.id);
+        this.mail.requestVerification(account.id,email);
         return { ...this.session(account), clubId: result.clubId, recoveryCode };
       });
     }
@@ -165,22 +171,33 @@ export class ClubService extends DurableObject {
     const selfAccount = typeof data.action === 'string' && data.action.startsWith('account');
     if (selfAccount && data.action !== 'accountSettings') {
       this.limit('account-write:' + account.id, 60, 15 * 60000);
-      this.limit('account-password:' + account.id, 10, 15 * 60000);
+      if (!['accountVerifyEmail','accountResendEmail'].includes(data.action)) this.limit('account-password:' + account.id, 10, 15 * 60000);
+      if (data.action==='accountVerifyEmail') this.limit('email-code:'+account.id,6,15*60000);
+      if (['accountRequestEmail','accountResendEmail'].includes(data.action)) {
+        this.limit('email-request:'+account.id,5,3600000);
+        let email;try{email=emailHelpers.normalizeEmail(data.action==='accountResendEmail'?this.mail.info(account.id).email:data.input?.email);}catch(error){fail('VALIDATION',error.message);}
+        this.limit('email-target:'+hash(email.toLowerCase()),5,3600000);
+      }
     }
     // Caller identity comes only from the opaque server-side session.
     if (typeof data.action === 'string' && data.action.startsWith('admin') && !['adminMembers','adminArchives'].includes(data.action)) this.limit('admin-write:' + account.id, 60, 15 * 60000);
     // Count attempts outside the edit transaction so failed verification cannot roll the limit back.
     if (typeof data.action === 'string' && data.action.startsWith('admin') && data.input?.adminPassword !== undefined) this.limit('admin-password:' + account.id, 10, 15 * 60000);
     const result = await this.store.transaction(async()=>{
+      const before = data.input?.taskId ? await this.store.get('tasks',data.input.taskId) : null;
       const result=await (selfAccount ? this.account(data.action, data.input || {}, account) : typeof data.action === 'string' && data.action.startsWith('admin') ? this.admin.execute(data.action, data.input || {}, account.id) : this.run(data.action, data.input, account.id));
       await this.booking.enqueue(result);
+      await this.mail.changed(before,result,data.action);
       return result;
     });
-    const currentUser = this.sql.exec('SELECT id,username FROM accounts WHERE id=?', account.id).toArray()[0];
+    const row = this.sql.exec('SELECT id,username FROM accounts WHERE id=?', account.id).toArray()[0];
+    const currentUser = row ? this.mail.publicUser(row) : null;
     return { ...result, currentUser, ...(result.club?{bookingEnabled:this.booking.configured() && result.club.id===this.env.BOOKING_CLUB_ID}:{}) };
   }
   async fetch(request) {
     const path=new URL(request.url).pathname;
+    // Only the scheduled handler can reach this DO-only route; the public router rejects it.
+    if(path==='/internal/mail-tick'&&request.method==='POST') {await this.pumpMail();return json({ok:true});}
     if(path==='/experience' || path.startsWith('/experience/')) {
       try {
         let data;
@@ -220,7 +237,7 @@ export class ClubService extends DurableObject {
     catch (e) { return json({ ok: false, code: e.code || 'VALIDATION', message: e.message }, 400); }
     // The legacy domain is asynchronous. Serialize its read/modify/write flow;
     // catch inside this gate so ordinary validation failures do not reset it.
-    return this.ctx.blockConcurrencyWhile(async () => {
+    const response = await this.ctx.blockConcurrencyWhile(async () => {
       try { return json({ ok: true, data: await this.handle(request, data) }); }
       catch (error) {
         if (error instanceof ClubError) return json({ ok: false, code: error.code, message: error.message }, STATUS[error.code] || 400);
@@ -228,11 +245,39 @@ export class ClubService extends DurableObject {
         return json({ ok: false, code: 'INTERNAL', message: '服务暂时不可用，请稍后重试' }, 500);
       }
     });
+    if(response.ok&&this.mail.configured()&&(path==='/auth/register'||['accountRequestEmail','accountResendEmail','accountVerifyEmail','createTask','createTaskGroup','editTask','complete'].includes(data.action)))this.ctx.waitUntil(this.pumpMail());
+    return response;
+  }
+  async pumpMail() {
+    if(!this.mail.configured())return;
+    if(this.mailRunning){this.mailNeedsScan=true;return;}
+    this.mailRunning=true;const started=Date.now();
+    try {
+      this.mailNeedsScan=false;
+      await this.ctx.blockConcurrencyWhile(()=>this.store.transaction(async()=>{await this.mail.scanDeadlines();this.mail.cleanup();}));
+      for(let count=0;count<40&&Date.now()-started<24000;) {
+        if(this.mailNeedsScan) {
+          this.mailNeedsScan=false;
+          await this.ctx.blockConcurrencyWhile(()=>this.store.transaction(()=>this.mail.scanDeadlines()));
+        }
+        const job=await this.ctx.blockConcurrencyWhile(()=>this.store.transaction(()=>this.mail.prepare()));
+        if(!job)break;
+        if(job.wait){await new Promise(resolve=>setTimeout(resolve,Math.min(job.wait,1000)));continue;}
+        const outcome=await this.mail.transmit(job);
+        await this.ctx.blockConcurrencyWhile(()=>this.store.transaction(()=>this.mail.finish(job,outcome)));
+        count++;
+      }
+    } catch(error) {console.error('Email processing failed',error.name);}
+    finally {this.mailRunning=false;}
   }
   async alarm() { await this.ctx.blockConcurrencyWhile(()=>this.booking.deliver()); }
 }
 
 export default {
+  async scheduled(event,env,ctx) {
+    const stub=env.CLUB_SERVICE.get(env.CLUB_SERVICE.idFromName('sps-club-service-v1'));
+    ctx.waitUntil(stub.fetch('https://internal/internal/mail-tick',{method:'POST'}));
+  },
   async fetch(request, env) {
     const origin = request.headers.get('Origin');
     const allowed = (env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);

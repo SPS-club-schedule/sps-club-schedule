@@ -18,8 +18,8 @@ test('durable task sync retries failures, isolates clubs, preserves private data
   const wait=async predicate=>{const end=Date.now()+25000;while(!predicate()){if(Date.now()>end)throw new Error('Sync timed out');await new Promise(r=>setTimeout(r,100));}};
   try{
     mf=new Miniflare(options());
-    const owner=(await post('/auth/register',{username:'sync_owner',password:'Sync-password-2026!',nickname:'PRIVATE NAME',name:'SPS',mode:'create'})).data;
-    const outsider=(await post('/auth/register',{username:'sync_other',password:'Sync-password-2026!',nickname:'Other',name:'Other',mode:'create'})).data;
+    const owner=(await post('/auth/register',{username:'sync_owner',email:'sync_owner@example.test',password:'Sync-password-2026!',nickname:'PRIVATE NAME',name:'SPS',mode:'create'})).data;
+    const outsider=(await post('/auth/register',{username:'sync_other',email:'sync_other@example.test',password:'Sync-password-2026!',nickname:'Other',name:'Other',mode:'create'})).data;
     assert.equal((await mf.dispatchFetch('http://localhost/integrations/booking')).status,404);
     const discovery=await (await mf.dispatchFetch('http://localhost/integrations/booking',{headers:{Authorization:'Bearer test-only-sync-key'}})).json();assert.equal(discovery.clubs.length,2);
     bindings.BOOKING_CLUB_ID=owner.clubId;await mf.setOptions(options());

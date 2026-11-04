@@ -16,7 +16,7 @@ async function api(action, input, token) {
   assert.equal(response.status,200,JSON.stringify(response)); return response.data;
 }
 async function register(username, invite, extra={}) {
-  const response=await post('/auth/register',{username,password,nickname:username,mode:invite?'join':'create',name:'Account deletion tests',invite,...extra});
+  const response=await post('/auth/register',{username,email:username+'@example.test',password,nickname:username,mode:invite?'join':'create',name:'Account deletion tests',invite,...extra});
   assert.equal(response.status,200,JSON.stringify(response)); return response.data;
 }
 async function fixture(prefix) {

@@ -19,7 +19,7 @@ test('public experience files preserve bytes across restart, enforce SPS members
   const manage=async(input,token,status=200)=>{const r=await post('/experience/manage',input,token);assert.equal(r.status,status,JSON.stringify(r));return r.data;};
   try {
     mf=new Miniflare(options());
-    const register=async(username,mode,invite)=>{const r=await post('/auth/register',{username,password:'Experience-test-2026!',nickname:username,name:'SPS archive',mode,invite});assert.equal(r.status,200,JSON.stringify(r));return r.data;};
+    const register=async(username,mode,invite)=>{const r=await post('/auth/register',{username,email:username+'@example.test',password:'Experience-test-2026!',nickname:username,name:'SPS archive',mode,invite});assert.equal(r.status,200,JSON.stringify(r));return r.data;};
     const owner=await register('archive_owner','create');bindings.EXPERIENCE_CLUB_ID=owner.clubId;await mf.setOptions(options());
     const invite=(await api('getInvite',{clubId:owner.clubId},owner.token)).token;
     const member=await register('archive_member','join',invite),other=await register('archive_other','join',invite),outsider=await register('archive_outsider','create');

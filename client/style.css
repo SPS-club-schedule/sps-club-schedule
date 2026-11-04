@@ -207,3 +207,5 @@ select:focus-visible, summary:focus-visible { outline: 3px solid #91aa7b; outlin
 .planning-row:last-of-type { border-bottom: 0; }
 .planning-row strong { display: block; margin-bottom: 5px; }
 .planning-row .small { line-height: 1.8; }
+
+.email-reminder{margin:16px auto;padding:14px 18px;max-width:720px;border:1px solid #d9c27a;border-radius:12px;background:#fff8e5;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px}.email-reminder span{flex:1;min-width:180px}.email-reminder a{white-space:nowrap}

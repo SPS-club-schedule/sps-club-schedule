@@ -6,11 +6,16 @@
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "triggers": { "crons": ["* * * * *"] },
   "durable_objects": {
     "bindings": [{ "name": "CLUB_SERVICE", "class_name": "ClubService" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ClubService"] }],
   "vars": {
+    "EMAIL_NOTIFICATIONS_ENABLED": "true",
+    "EMAIL_DAILY_LIMIT": "100",
+    "EMAIL_FROM": "SPS 社团日程 <notifications@sps-schedule.folderrewind.top>",
+    "EMAIL_SITE_URL": "https://sps-club-schedule.github.io/sps-club-schedule/",
     "ALLOWED_ORIGINS": "https://sps-club-schedule.github.io,https://farawayshore.github.io",
     "REGISTRATION_OPEN": "true",
     "EXPERIENCE_CLUB_ID": "c_4b41fd4ed7f3812cb1c624261a986141",

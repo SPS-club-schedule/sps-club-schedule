@@ -14,7 +14,7 @@ async function post(route,data,token) {
 const attempt=(action,input,token)=>post('/api',{action,input},token);
 async function api(action,input,token) {const r=await attempt(action,input,token); assert.equal(r.status,200,JSON.stringify(r)); return r.data;}
 async function register(username,invite) {
-  const r=await post('/auth/register',{username,password,nickname:username,mode:invite?'join':'create',name:'Archive tests',invite});
+  const r=await post('/auth/register',{username,email:username+'@example.test',password,nickname:username,mode:invite?'join':'create',name:'Archive tests',invite});
   assert.equal(r.status,200,JSON.stringify(r)); return r.data;
 }
 async function fixture(prefix) {

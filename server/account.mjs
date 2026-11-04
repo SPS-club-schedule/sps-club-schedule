@@ -3,14 +3,24 @@ import { accountRevision, bumpAccountRevision } from './admin.mjs';
 const { ClubError } = domain;
 const fail = (code, message) => { throw new ClubError(code, message); };
 
-export function createAccountService({ store, sql, username, password, passwordHash, verifyPassword, random, hash }) {
-  const info = row => ({ username:row.username, createdAt:row.created_at, revision:accountRevision(sql,row.id) });
+export function createAccountService({ store, sql, username, password, passwordHash, verifyPassword, random, hash, mail }) {
+  const info = row => ({ username:row.username, createdAt:row.created_at, revision:accountRevision(sql,row.id),...mail.info(row.id) });
   return async function execute(action, input, actor) {
     return store.transaction(async () => {
       // The session identifies the account; no supplied user/member/club ID is used.
       const row = sql.exec('SELECT * FROM accounts WHERE id=?', actor.id).toArray()[0];
       if (!row) fail('UNAUTHENTICATED', '账号已失效，请重新登录');
       if (action === 'accountSettings') return { account:info(row) };
+      if (['accountRequestEmail','accountResendEmail','accountVerifyEmail'].includes(action)) {
+        if (input.revision !== accountRevision(sql,row.id)) fail('CONFLICT','账号资料已更新，请重新加载后再修改');
+        if(action==='accountRequestEmail') {
+          verifyPassword(row.id,input.currentPassword);
+          mail.requestVerification(row.id,input.email);
+        } else if(action==='accountResendEmail') mail.requestVerification(row.id,mail.info(row.id).email);
+        else mail.verify(row.id,input.code);
+        bumpAccountRevision(sql,row.id);
+        return {account:info(row)};
+      }
       if (!['accountChangeUsername','accountChangePassword'].includes(action)) fail('VALIDATION', '不支持的账号操作');
       if (input.revision !== accountRevision(sql,row.id)) fail('CONFLICT', '账号资料已更新，请重新加载后再修改');
       verifyPassword(row.id,input.currentPassword);

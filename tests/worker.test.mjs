@@ -15,7 +15,7 @@ async function post(route, data, token, origin = 'https://site.test') {
 }
 async function api(action, input, token=owner.token) { const r=await post('/api',{action,input},token); assert.equal(r.status,200,JSON.stringify(r)); return r.data; }
 async function register(username, mode, extra={},ip='') {
-  const data={username,password,nickname:username,mode,name:'SPS 测试社团',invite,...extra};
+  const data={username,email:username+'@example.test',password,nickname:username,mode,name:'SPS 测试社团',invite,...extra};
   if(!ip)return post('/auth/register',data);
   const time=String(Date.now()),signature=createHmac('sha256','test-gateway-secret').update(`${time}\n${ip}`).digest('hex');
   const response=await mf.dispatchFetch('http://localhost/auth/register',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://site.test','X-SPS-Gateway-IP':ip,'X-SPS-Gateway-Time':time,'X-SPS-Gateway-Signature':signature},body:JSON.stringify(data)});
@@ -324,7 +324,7 @@ test('separate management roles enforce hierarchy, department boundaries, audit 
   async function scopedRegister(username,mode,invite) {
     const time=String(Date.now()),ip='192.0.2.77';
     const signature=createHmac('sha256','test-gateway-secret').update(`${time}\n${ip}`).digest('hex');
-    const response=await mf.dispatchFetch('http://localhost/auth/register',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://site.test','X-SPS-Gateway-IP':ip,'X-SPS-Gateway-Time':time,'X-SPS-Gateway-Signature':signature},body:JSON.stringify({username,password,nickname:username,mode,invite,name:'Scoped roles'})});
+    const response=await mf.dispatchFetch('http://localhost/auth/register',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://site.test','X-SPS-Gateway-IP':ip,'X-SPS-Gateway-Time':time,'X-SPS-Gateway-Signature':signature},body:JSON.stringify({username,email:username+'@example.test',password,nickname:username,mode,invite,name:'Scoped roles'})});
     const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));return result.data;
   }
   const creator=await scopedRegister('scoped_owner','create'),clubId=creator.clubId;
@@ -481,7 +481,7 @@ test('department tutorial dismissal survives a new login and SQLite restart, bel
   const registerGuide=async(username,mode,extra={})=>{
     const time=String(Date.now()),ip='192.0.2.78';
     const signature=createHmac('sha256','test-gateway-secret').update(`${time}\n${ip}`).digest('hex');
-    const response=await mf.dispatchFetch('http://localhost/auth/register',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://site.test','X-SPS-Gateway-IP':ip,'X-SPS-Gateway-Time':time,'X-SPS-Gateway-Signature':signature},body:JSON.stringify({username,password,nickname:username,mode,name:'Guide test',...extra})});
+    const response=await mf.dispatchFetch('http://localhost/auth/register',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://site.test','X-SPS-Gateway-IP':ip,'X-SPS-Gateway-Time':time,'X-SPS-Gateway-Signature':signature},body:JSON.stringify({username,email:username+'@example.test',password,nickname:username,mode,name:'Guide test',...extra})});
     const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));return result;
   };
   const f=await adminFixture('guide',registerGuide),initial=await api('bootstrap',{clubId:f.clubId},f.member.token);
