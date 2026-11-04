@@ -4,6 +4,7 @@ const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments
 const { isAdmin } = require('./permissions');
 const { resolveParticipants } = require('./assignments');
 const { validDurationMinutes } = require('./template-duration');
+const { normalizeStepDependencies } = require('./step-dependencies');
 
 // Shared by the cloud function and the local demonstration. Identity is injected
 // by the adapter; no action trusts a member ID supplied as the caller.
@@ -99,6 +100,12 @@ function createService({ store, now, randomId, hash }) {
     if (!Number.isInteger(value) || value < 0 || value > 365) fail('VALIDATION', '提前天数须为0—365的整数');
     return value;
   }
+  function dependencySteps(steps, previous = null) {
+    // Old editors discard IDs and relations; never silently erase saved dependencies.
+    if (previous?.steps.some(step=>step.dependsOn?.length) && steps.some(step=>step?.id===undefined || step?.dependsOn===undefined)) fail('CONFLICT','此模板已设置子任务依赖，请刷新页面后重新编辑或套用');
+    try { return normalizeStepDependencies(steps); }
+    catch (error) { fail('VALIDATION',error.message); }
+  }
   function templateContent(input, roster, previous = null) {
     if (!Array.isArray(input.steps) || !input.steps.length || input.steps.length > MAX_STEPS) fail('VALIDATION', `模板须包含1—${MAX_STEPS}项子任务`);
     // Old editors cannot safely match reordered steps to their role bindings.
@@ -111,9 +118,9 @@ function createService({ store, now, randomId, hash }) {
       durationMinutes, roles,
       name: text(input.name, '模板名称', 80), category: text(input.category || '', '分类', 30, true) || '未分类',
       ...content(input), ...main,
-      steps: input.steps.map(step => {
+      steps: dependencySteps(input.steps,previous).map(step => {
         if (!step || typeof step !== 'object') fail('VALIDATION', '子任务格式无效');
-        return { ...content(step), ...assignment(step, roster, { optional: true, template: true, main, roles }), daysBefore: offset(step.daysBefore) };
+        return { ...content(step), ...assignment(step, roster, { optional: true, template: true, main, roles }), daysBefore: offset(step.daysBefore), id:step.id, dependsOn:step.dependsOn };
       })
     };
   }
@@ -339,20 +346,22 @@ function createService({ store, now, randomId, hash }) {
         const roles=templateRoles(input.roles).map((role,index)=>({ ...role, ...assignment({...input.roles[index],mode:'individual'},roster,{optional:true}) , participantDepartment:input.roles[index].participantDepartment || '' }));
         const fields = { ...content(input), ...assignment(input, roster), ...schedule(input) };
         const {dueAt}=fields;
-        let sourceTemplate;
+        let sourceTemplate, template;
         if (input.templateId) {
-          const template = await tx.get('templates', input.templateId);
+          template = await tx.get('templates', input.templateId);
           if (!template || template.clubId !== input.clubId) fail('NOT_FOUND', '模板不属于当前社团');
           if (template.archived) fail('ARCHIVED', '模板已归档，请选择其他模板');
           sourceTemplate = { id: template._id, name: template.name };
         }
-        const children = input.subtasks.map((step, index) => {
+        const steps=dependencySteps(input.subtasks,template);
+        const taskIds=new Map(steps.map((step,index)=>[step.id,taskId+'_'+index]));
+        const children = steps.map((step, index) => {
           if (!step || typeof step !== 'object') fail('VALIDATION', '子任务格式无效');
           const daysBefore = offset(step.daysBefore);
           const childDue = step.dueAt === undefined ? relativeDeadline(dueAt, daysBefore) : step.dueAt;
           if (!Number.isSafeInteger(childDue) || childDue <= now()) fail('VALIDATION', `子任务${index + 1}的截止时间已过，请调整日期或提前天数`);
           if (childDue > dueAt) fail('VALIDATION', `子任务${index + 1}不能晚于主任务截止`);
-          return { ...content(step), ...assignment(step, roster, { main: fields, roles }), ...schedule({...step,dueAt:childDue},null,true), daysBefore };
+          return { ...content(step), ...assignment(step, roster, { main: fields, roles }), ...schedule({...step,dueAt:childDue},null,true), daysBefore, dependsOnTaskIds:step.dependsOn.map(id=>taskIds.get(id)) };
         });
         const change = await stamp(tx, input.clubId, 'tasks');
         const common = { clubId: input.clubId, creatorId: me._id, createdAt: now(), updatedAt: now(), revision: 1, syncVersion: change.version, archived: false, completions: {}, sharedCompletion: null };

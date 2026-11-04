@@ -422,3 +422,26 @@ test('template roles persist across SQLite restart and resolve atomically when p
   assert.ok(result.tasks.every(task=>task.roles===undefined&&task.roleId===undefined));
   assert.equal((await api('createTaskGroup',input)).taskId,result.taskId);
 });
+
+test('informational dependencies survive SQLite restart and allow completing a dependent before its prerequisite',async()=>{
+  const before=await api('bootstrap',{clubId}),base=before.templates[0];
+  const fields={...base.steps[0],roleId:'',followMain:false,participantDepartment:'',participantIds:[before.me.id],daysBefore:1};
+  const {template}=await api('createTemplate',{...base,roles:[],clubId,requestId:'dependencies-runtime-template',steps:[{...fields,id:'poster',title:'海报',dependsOn:['copy']},{...fields,id:'copy',title:'文案',dependsOn:[]}]});
+  await mf.dispose();mf=new Miniflare(options);
+  const saved=(await api('sync',{clubId,since:before.version})).templates.find(t=>t._id===template._id);
+  assert.deepEqual(saved.steps[0].dependsOn,['copy']);
+  const copy=await api('createTemplate',{...saved,requestId:'dependencies-runtime-copy'});
+  assert.deepEqual(copy.template.steps,saved.steps);
+  const input={...saved,clubId,templateId:saved._id,requestId:'dependencies-runtime-group',participantIds:[before.me.id],dueAt:Date.now()+7*86400000,subtasks:saved.steps};
+  const invalid=await post('/api',{action:'createTaskGroup',input:{...input,subtasks:[{...fields,id:'poster',dependsOn:['foreign-id']}]}} ,owner.token);
+  assert.equal(invalid.status,400);
+  const result=await api('createTaskGroup',input),poster=result.tasks[1],text=result.tasks[2];
+  assert.deepEqual(poster.dependsOnTaskIds,[text._id]);
+  const completed=await api('complete',{taskId:poster._id,done:true});
+  assert.ok(completed.task.completions[before.me.id]);
+  await mf.dispose();mf=new Miniflare(options);
+  const board=await api('bootstrap',{clubId});
+  assert.deepEqual(board.tasks.find(t=>t._id===poster._id).dependsOnTaskIds,[text._id]);
+  assert.deepEqual(board.tasks.find(t=>t._id===text._id).completions,{});
+  assert.equal((await api('createTaskGroup',input)).taskId,result.taskId);
+});

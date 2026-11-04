@@ -3,6 +3,7 @@ import * as views from './views';
 import { parts, taskView } from '../shared/view';
 import { shiftMonth } from '../shared/calendar';
 import { templateDraft, draftDeadline, MAX_STEPS, MAX_ROLES } from '../shared/templates';
+import { normalizeStepDependencies, canDependOn, removeStep } from '../shared/step-dependencies';
 import { isAdmin } from '../shared/permissions';
 import { departmentLabel, invitationToken } from '../shared/departments';
 import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain, setRole, removeRole } from '../shared/assignments';
@@ -221,6 +222,7 @@ async function route() {
       Object.assign(s.form,scheduleDraft(task));
       if (!task && !parent && s.selectedTemplate) applyTemplate();
       if(!task&&!parent&&!s.selectedTemplate)Object.assign(s,guideDrafts.takeTask(guideKey())||{});
+      s.steps=normalizeStepDependencies(s.steps);
     }
     if (page === 'template-edit') {
       if (!b.club) { go('/entry'); return; }
@@ -452,13 +454,13 @@ root.addEventListener('submit', event => {
         if (!resolveParticipants(step,s.editBoard.members,data).length) { s.openSteps.add(index); throw new Error(step.roleId?`请为角色「${data.roles.find(role=>role.id===step.roleId)?.name || '未命名'}」选择负责人`:`请为子任务${index+1}「${step.title}」选择负责人`); }
         const dueAt=draftDeadline(data,step);
         if(dueAt<=Date.now()) { s.openSteps.add(index); throw new Error(`子任务${index+1}「${step.title}」的截止时间已过，请调整日期或提前天数`); }
-        return {...taskFields(step),roleId:step.roleId || '',followMain:step.followMain === true,daysBefore:step.daysBefore,...(step.customDeadline?{dueAt}:{})};
+        return {...taskFields(step),id:step.id,dependsOn:step.dependsOn || [],roleId:step.roleId || '',followMain:step.followMain === true,daysBefore:step.daysBefore,...(step.customDeadline?{dueAt}:{})};
       }):undefined;
       const result = await api.call(s.id?'editTask':group?'createTaskGroup':'createTask', { ...taskFields(data), ...scheduleFields(data), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId, ...(group?{subtasks,roles:(data.roles || []).map(role=>({id:role.id,name:role.name,participantIds:role.participantIds,participantDepartment:role.participantDepartment || ''})),templateId:s.appliedTemplate?.id}:{}) });
       go('/task?id='+encodeURIComponent(result.taskId));
     }
     if (kind === 'template') {
-      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),durationMinutes:templateDurationValue(data),name:data.name,category:data.category,roles:(data.roles || []).map(role=>({id:role.id,name:role.name})),steps:s.steps.map(step=>({...taskFields(step),roleId:step.roleId || '',followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
+      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),durationMinutes:templateDurationValue(data),name:data.name,category:data.category,roles:(data.roles || []).map(role=>({id:role.id,name:role.name})),steps:s.steps.map(step=>({...taskFields(step),id:step.id,dependsOn:step.dependsOn || [],roleId:step.roleId || '',followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
       go('/templates'); toast('共享模板已保存');
     }
     if (kind === 'name') { await api.call('renameMe', { clubId: s.sync.board.club.id, name: data.nickname }); s.form.nickname = undefined; toast('称呼已更新'); }
@@ -498,10 +500,14 @@ root.addEventListener('click', event => {
     else chooseDepartment(role,value,s.editBoard.members);
     render(); return;
   }
-  if (['addStep','removeStep','stepUp','stepDown','stepParticipant','stepDepartment','stepFollow','stepCustom','stepRelative','assignStepsToMe'].includes(action)) {
+  if (['addStep','removeStep','stepUp','stepDown','stepDependency','stepParticipant','stepDepartment','stepFollow','stepCustom','stepRelative','assignStepsToMe'].includes(action)) {
     const index=Number(el.dataset.index), step=s.steps[index];
-    if(action==='addStep'&&s.steps.length<MAX_STEPS) { s.steps.push({title:'',description:'',daysBefore:1,mode:'individual',priority:'normal',participantIds:[],customDeadline:false}); s.openSteps.add(s.steps.length-1); }
-    if(action==='removeStep') { s.steps.splice(index,1); s.openSteps=new Set(); }
+    if(action==='addStep'&&s.steps.length<MAX_STEPS) { s.steps.push({id:api.requestId(),dependsOn:[],title:'',description:'',daysBefore:1,mode:'individual',priority:'normal',participantIds:[],customDeadline:false}); s.openSteps.add(s.steps.length-1); }
+    if(action==='removeStep') { removeStep(s.steps,index); s.openSteps=new Set(); }
+    if(action==='stepDependency'&&step&&s.steps.some(item=>item.id===id)) {
+      if(step.dependsOn?.includes(id)) step.dependsOn=step.dependsOn.filter(ref=>ref!==id);
+      else if(canDependOn(s.steps,step.id,id)) step.dependsOn=[...(step.dependsOn || []),id];
+    }
     if(action==='stepUp'||action==='stepDown') {
       const target=index+(action==='stepUp'?-1:1);
       if(target>=0&&target<s.steps.length) { [s.steps[index],s.steps[target]]=[s.steps[target],s.steps[index]]; s.openSteps=new Set([target]); }

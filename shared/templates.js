@@ -3,6 +3,7 @@ const MAX_STEPS = 20;
 const MAX_ROLES = 20;
 const { parseDeadline } = require('./view');
 const { resolveParticipants } = require('./assignments');
+const { normalizeStepDependencies } = require('./step-dependencies');
 function seminarTemplate() {
   return {
     name: '研讨班 Seminar', category: '学术活动', title: '研讨班', description: '',
@@ -22,7 +23,7 @@ function relativeDeadline(mainDueAt, daysBefore) {
 function templateDraft(template, members) {
   const ids = new Set(members.map(m => m.id));
   const copy = item => ({ title: item.title, description: item.description, mode: item.mode, priority: item.priority, participantDepartment: item.participantDepartment || '', participantIds: resolveParticipants({ ...item, followMain: false }, members).filter(id => ids.has(id)) });
-  return { ...copy(template), roles:(template.roles || []).map(role=>({id:role.id,name:role.name,participantIds:[],participantDepartment:''})), durationMinutes:template.durationMinutes ?? null, steps: template.steps.map(step => ({ ...copy(step), roleId:step.roleId || '', followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
+  return { ...copy(template), roles:(template.roles || []).map(role=>({id:role.id,name:role.name,participantIds:[],participantDepartment:''})), durationMinutes:template.durationMinutes ?? null, steps: normalizeStepDependencies(template.steps).map(step => ({ ...copy(step), id:step.id, dependsOn:step.dependsOn, roleId:step.roleId || '', followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
 }
 function draftDeadline(main, step) {
   return step.customDeadline ? parseDeadline(step.date, step.time) : relativeDeadline(parseDeadline(main.date, main.time), step.daysBefore);

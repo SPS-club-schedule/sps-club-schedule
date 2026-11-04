@@ -179,3 +179,8 @@ select:focus-visible, summary:focus-visible { outline: 3px solid #91aa7b; outlin
 .admin-member .pill { flex-shrink: 0; }
 .admin-event + .admin-event { border-top: 1px solid #edf0e9; margin-top: 10px; padding-top: 10px; }
 #reset-link { height: 100px; font-size: 12px; overflow-wrap: anywhere; }
+
+.dependency-summary { color: #476556; line-height: 1.8; }
+.dependency-link { text-decoration: underline; text-underline-offset: 3px; }
+.dependency-picker .chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.dependency-picker .chip:disabled { opacity: .5; cursor: not-allowed; }
