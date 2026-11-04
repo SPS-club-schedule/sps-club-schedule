@@ -45,7 +45,7 @@ const tutorial=createTutorial({
   go(path);
 }});
 const desktop=window.matchMedia('(min-width: 1000px)');
-const workspaceUi={calendarOpen:false,context:'board',clubId:'',planner:{date:parts(Date.now()).date,mode:desktop.matches?'week':'day',showDeadlines:true}};
+const workspaceUi={calendarOpen:false,context:'mine',clubId:'',planner:{date:parts(Date.now()).date,mode:desktop.matches?'week':'day',showDeadlines:true}};
 let stop = null, generation = 0, inviteKey = '', adminLoad = 0;
 let activeRouteHash=location.hash,documentPreviewTimer;
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
@@ -188,14 +188,15 @@ async function route() {
   }
   activeRouteHash=location.hash;
   const ticket = ++generation; if (stop) stop(); stop = null;
-  const url = new URL((location.hash.slice(1) || '/board'), 'https://local.invalid');
+  const url = new URL((location.hash.slice(1) || '/mine'), 'https://local.invalid');
   const page = url.pathname.slice(1), invitation = url.searchParams.get('invite');
   if (!api.user() && !['auth','reset','experience'].includes(page)) { go('/auth'); return; }
-  if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : url.searchParams.get('next')==='experience'?'/experience':'/board'); return; }
+  if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : url.searchParams.get('next')==='experience'?'/experience':'/mine'); return; }
   if(['board','mine','templates'].includes(page))workspaceUi.context=page;
   if(page==='calendar')workspaceUi.calendarOpen=true;
+  if(page==='mine')workspaceUi.calendarOpen=false;
   if(['auth','entry','reset'].includes(page)){workspaceUi.calendarOpen=false;workspaceUi.planner.scope=undefined;}
-  s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId(),plannerSettings:workspaceUi.planner,booking:s.booking,bookingCheckedAt:s.bookingCheckedAt,experience:page==='experience'&&s.page==='experience'&&s.experienceViewer===(api.user()?.id||'')?s.experience:undefined,experienceViewer:api.user()?.id||'' };
+  s = { page, taskReturn:workspaceUi.context==='board'?'board':'mine', id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId(),plannerSettings:workspaceUi.planner,booking:s.booking,bookingCheckedAt:s.bookingCheckedAt,experience:page==='experience'&&s.page==='experience'&&s.experienceViewer===(api.user()?.id||'')?s.experience:undefined,experienceViewer:api.user()?.id||'' };
   s.guidePractice=['edit','template-edit'].includes(page)&&url.searchParams.get('guide')==='department';
   if(s.guidePractice){s.id=null;s.parentId=null;s.selectedTemplate='';}
   s.afterAuth=url.searchParams.get('next')==='experience'?'/experience':'';
@@ -448,7 +449,7 @@ root.addEventListener('submit', event => {
       const result = await api.authenticate(s.authMode, { ...data, mode: s.joinMode });
       s.form.password = ''; s.form.recoveryCode = '';
       if (result.recoveryCode) { s.recovery = result.recoveryCode; render(); }
-      else go(data.invite ? '/entry?invite='+encodeURIComponent(data.invite) : s.afterAuth||'/board');
+      else go(data.invite ? '/entry?invite='+encodeURIComponent(data.invite) : s.afterAuth||'/mine');
     }
     if (kind==='resetPassword') {
       if (data.password!==data.confirmPassword) throw new Error('两次输入的密码不一致');
@@ -475,7 +476,7 @@ root.addEventListener('submit', event => {
     }
     if (kind === 'club') {
       const result = await api.call(s.joinMode==='create'?'createClub':'joinClub', { nickname: data.nickname, name: data.name, token: data.invite.trim(), requestId: s.requestId });
-      api.setClub(result.clubId); go('/board'); if (result.department) toast('已加入'+departmentLabel(result.department));
+      api.setClub(result.clubId); go('/mine'); if (result.department) toast('已加入'+departmentLabel(result.department));
     }
     if (kind === 'task') {
       if (data.hasDuration && data.endFollowsDuration) followDuration(data);
@@ -593,8 +594,8 @@ root.addEventListener('click', event => {
   if (action === 'department') { chooseDepartment(s.form,value,s.editBoard.members); render(); return; }
   if (action === 'participant') { toggleParticipant(s.form,id,s.editBoard.members); render(); return; }
   if (action === 'allMembers') { const ids=resolveParticipants(s.form,s.editBoard.members),core=s.editBoard.members.filter(m=>!isSpeaker(m.role));s.form.participantIds = core.length===ids.length&&core.every(m=>ids.includes(m.id)) ? [] : core.map(m=>m.id);s.form.participantDepartment=''; render(); return; }
-  if (action === 'chooseClub') { api.setClub(id); go('/board'); return; }
-  if (action === 'continue') { s.recovery = ''; go('/board'); return; }
+  if (action === 'chooseClub') { api.setClub(id); go('/mine'); return; }
+  if (action === 'continue') { s.recovery = ''; go('/mine'); return; }
   if (action === 'copyRecovery') { copy(s.recovery); return; }
   if (action === 'archiveType' && ['tasks','templates'].includes(value)) { s.archiveType=value; s.search=''; render(); return; }
   if (action === 'accountRecoverySaved') { s.recovery=''; render(); window.scrollTo(0,0); return; }
@@ -654,7 +655,7 @@ root.addEventListener('click', event => {
       const t = taskView(raw,b);
       await api.call('complete', { taskId: id, done: !t.myDone }); toast(t.myDone?'已撤销完成':'已记录完成');
     }
-    if (action === 'archive' && await confirmAction('归档这项任务？','归档后将从看板隐藏；如有子任务，也会一起归档。已有完成记录会保留。')) { await api.call('archiveTask', { taskId: s.id }); go('/board'); }
+    if (action === 'archive' && await confirmAction('归档这项任务？','归档后将从看板隐藏；如有子任务，也会一起归档。已有完成记录会保留。')) { await api.call('archiveTask', { taskId: s.id }); go('/'+s.taskReturn); }
     if(action==='archiveTemplate') {
       const template=s.sync.board.templates.find(t=>t._id===id);
       if(template&&await confirmAction('归档这个模板？','模板将从共享模板库隐藏，已经发布的任务保持不变。')) await api.call('archiveTemplate',{templateId:id,revision:template.revision});

@@ -8,6 +8,7 @@ import {departmentSteps} from './department-tutorial';
 // Member practice uses the user’s draft; the department guide uses local examples.
 // Neither guide submits a form or creates server-side tasks/templates.
 const memberSteps=[
+  {id:'todos',page:'mine',target:'[data-tour="my-todos"]',title:'先处理分配给自己的待办',text:'进入社团后默认来到这里。点击条目右侧的小方框即可完成，点击任务主体查看详情；已完成的事项可在「已完成」中找到。任务看板集中展示社团概况和日历。',next:'再看社团安排'},
   {id:'calendar',page:'board',target:'[data-tour="calendar-open"]',title:'先看安排，再发起任务',text:'这是月历入口：按日期看活动和截止事项。点击高亮的「展开日历」，试试日 / 周视图。全程可跳过，以后从「新手指南」重开。',action:'a[href="#/calendar"]'},
   {id:'planner',page:'calendar',target:'.planner-toolbar',title:'在真实日历中切换日 / 周',text:'试着点「日」或「周」，切换日期或截止范围。活动是时间块，DDL 是截止事项；所有时间均为北京时间。',next:'看看日历导出'},
   {id:'export',page:'calendar',target:'.planner-foot',title:'预约日历与个人日历',text:'「预约总览」打开 club-booking，预约活动也会出现在本站（不含课程）。.ics 导出自己的活动与待办，是当前快照，变化后需重新导出。',next:'认识经验档案'},
@@ -118,7 +119,7 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
     const needsDoc=['experience-read','experience-source','experience-preview','experience-save'].includes(step.id);
     const page=step.page;
     pendingPage=page;
-    if(page!==state.page && !(page==='board'&&state.page==='mine')) {
+    if(page!==state.page) {
       navigate(kind==='department'?'/'+page+(['edit','template-edit'].includes(page)?'?guide=department':''):page==='experience'&&step.id==='experience-read'?(readUrl||'/experience'):'/'+page,{restoreDocument:!!step.writeOnly});return;
     }
     if(directory&&state.experienceDocument){navigate('/experience');return;}
@@ -155,7 +156,7 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
     card.setAttribute('aria-label',kind==='department'?'模板设置教程':'新手操作指南');
     key=guideKey(accountId,clubId);
     if(!key)return;
-    index=kind==='department'?0:['board','mine'].includes(s.page)?0:s.page==='calendar'?1:s.page==='experience'&&!s.experienceDocument?stepIndex('experience-search'):s.page==='edit'&&!s.id&&!s.parentId?stepIndex('title'):-1;
+    index=kind==='department'?0:s.page==='mine'?stepIndex('todos'):s.page==='board'?stepIndex('calendar'):s.page==='calendar'?stepIndex('planner'):s.page==='experience'&&!s.experienceDocument?stepIndex('experience-search'):s.page==='edit'&&!s.id&&!s.parentId?stepIndex('title'):-1;
     if(!active())return;
     returnFocus=document.activeElement;painted=-1;pendingPage='';history=[index];cursor=0;childIndex=(s.steps?.length||0)-1;readUrl='';canWrite=!!s.experience?.canWrite;
     document.body.classList.add('member-guide-active');
@@ -218,7 +219,7 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
       if(key!==nextKey){stop(false,false);return;}
       // A user's back/forward navigation ends the guide instead of trapping them.
       const expected=steps[index].page;
-      const matches=expected==='board'?['board','mine'].includes(s.page):s.page===expected;
+      const matches=s.page===expected;
       // Navigation clicks update the step before the async route loads its controls.
       if(s.error){stop(false,false);return;}
       if(!matches) {

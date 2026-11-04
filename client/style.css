@@ -87,6 +87,22 @@ textarea { height: 105px; line-height: 1.6; }
 .task-bottom .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .arrow { color: #91a08f; font-size: 16px; }
 .completed .task-title { color: #7c8e7e; }
+.todo-list { list-style: none; margin: 0; padding: 0; }
+.todo-item { display: flex; align-items: stretch; background: #fff; border: 1px solid #e3e9df; border-radius: 12px; margin-bottom: 8px; }
+.todo-main { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: center; gap: 5px; padding: 14px 0 14px 14px; border-radius: 12px; overflow-wrap: anywhere; }
+.todo-main:hover .todo-title { color: #245b45; }
+.todo-title { font-size: 15px; font-weight: 600; line-height: 1.5; }
+.todo-parent { color: #829082; font-size: 11px; }
+.todo-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; color: #839084; font-size: 11px; }
+.todo-priority { color: #a57b25; }
+.todo-duration { color: #476d78; font-size: 11px; }
+.todo-toggle { display: flex; width: 52px; min-height: 48px; flex-shrink: 0; align-items: center; justify-content: center; padding: 0; margin: 3px; background: transparent; border-radius: 10px; }
+.todo-box { display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1.5px solid #afc1ad; border-radius: 5px; color: white; font-size: 14px; }
+.todo-toggle[aria-checked="true"] .todo-box { background: #397855; border-color: #397855; }
+.todo-toggle:hover:not(:disabled) { background: #f1f6ed; }
+.todo-toggle:disabled { cursor: default; }
+.todo-item.completed .todo-title { color: #7c8e7e; text-decoration: line-through; text-decoration-color: #b7c5b5; }
+.todo-item.completed { background: #f9fbf6; }
 .bottom-note { font-size: 10.5px; color: #9ba797; text-align: center; padding: 12.5px 0; }
 
 .deadline-calendar { padding: 14px; }
