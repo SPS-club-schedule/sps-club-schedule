@@ -69,6 +69,7 @@ test('Previous parks the entire new-task draft without changing it or mixing mem
   assert.equal(store.hasDraft(key),false);assert.equal(store.takeTask(key),undefined);
   store.capture({...draft,id:'published-task'},key);assert.equal(store.takeTask(key),undefined);
   store.capture({...draft,parentId:'parent'},key);assert.equal(store.takeTask(key),undefined);
+  store.capture({...draft,guidePractice:true},key);assert.equal(store.takeTask(key),undefined);
 });
 
 test('experience practice drafts remain separate from task drafts and restore exactly once',()=>{

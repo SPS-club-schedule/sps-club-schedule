@@ -145,10 +145,10 @@ test('shared templates persist in SQLite and batch creation is atomic, repeatabl
   assert.equal((await api('bootstrap',{clubId},alice.token)).tasks.filter(t=>t.parentTaskId===group.taskId).length,5);
 });
 
-async function adminFixture(prefix) {
-  const creator=(await register(prefix+'_owner','create')).data;
+async function adminFixture(prefix,registerAccount=register) {
+  const creator=(await registerAccount(prefix+'_owner','create')).data;
   const clubId=creator.clubId, invite=(await api('getInvite',{clubId},creator.token)).token;
-  const member=(await register(prefix+'_member','join',{invite})).data;
+  const member=(await registerAccount(prefix+'_member','join',{invite})).data;
   const list=()=>api('adminMembers',{clubId},creator.token);
   const row=async account=>(await list()).members.find(m=>m.username===account.user.username);
   const input=target=>({clubId,memberId:target.id,memberVersion:target.syncVersion,accountRevision:target.accountRevision,name:target.name,role:target.role,username:target.username,adminPassword:password});
@@ -469,4 +469,36 @@ test('backward scheduling persists estimates and computes conservative deadlines
   assert.equal(tasks.find(t=>t._id===result.tasks[1]._id).estimateMinutes,4320);
   assert.equal(tasks.find(t=>t._id===result.tasks[1]._id).dueAt,dueAt-3*day);
   assert.equal((await api('createTaskGroup',input)).taskId,result.taskId);
+});
+
+test('department tutorial dismissal survives a new login and SQLite restart, belongs only to the actor and syncs privately',async()=>{
+  const registerGuide=async(username,mode,extra={})=>{
+    const time=String(Date.now()),ip='192.0.2.78';
+    const signature=createHmac('sha256','test-gateway-secret').update(`${time}\n${ip}`).digest('hex');
+    const response=await mf.dispatchFetch('http://localhost/auth/register',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://site.test','X-SPS-Gateway-IP':ip,'X-SPS-Gateway-Time':time,'X-SPS-Gateway-Signature':signature},body:JSON.stringify({username,password,nickname:username,mode,name:'Guide test',...extra})});
+    const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));return result;
+  };
+  const f=await adminFixture('guide',registerGuide),initial=await api('bootstrap',{clubId:f.clubId},f.member.token);
+  const input={clubId:f.clubId,version:1,status:'skipped',memberId:initial.members.find(m=>m.id!==initial.me.id).id};
+  assert.equal((await post('/api',{action:'dismissDepartmentTutorial',input},f.member.token)).status,403);
+  await api('adminEditMember',{...f.input(await f.row(f.member)),role:'department_admin',department:'academic'},f.creator.token);
+  const promoted=await api('bootstrap',{clubId:f.clubId},f.member.token);
+  assert.equal(promoted.me.departmentTemplateGuide,undefined);
+  for(const patch of [{version:2},{status:'anything'}])assert.equal((await post('/api',{action:'dismissDepartmentTutorial',input:{...input,...patch}},f.member.token)).status,400);
+  const skipped=await api('dismissDepartmentTutorial',input,f.member.token);
+  assert.equal(skipped.member.id,promoted.me.id);assert.equal(skipped.member.departmentTemplateGuide.status,'skipped');
+  assert.equal((await api('dismissDepartmentTutorial',input,f.member.token)).version,skipped.version);
+  const ownDelta=await api('sync',{clubId:f.clubId,since:promoted.version},f.member.token);
+  assert.equal(ownDelta.me.departmentTemplateGuide.status,'skipped');assert.equal(ownDelta.members[0].departmentTemplateGuide.status,'skipped');
+  const peerDelta=await api('sync',{clubId:f.clubId,since:promoted.version},f.creator.token);
+  assert.equal(peerDelta.members[0].departmentTemplateGuide,undefined);assert.equal(peerDelta.me.departmentTemplateGuide,undefined);
+  const completed=await api('dismissDepartmentTutorial',{...input,status:'completed'},f.member.token);
+  assert.equal((await api('dismissDepartmentTutorial',input,f.member.token)).version,completed.version);
+  await mf.dispose();mf=new Miniflare(options);
+  const login=await post('/auth/login',{username:f.member.user.username,password});assert.equal(login.status,200);
+  const restored=await api('bootstrap',{clubId:f.clubId},login.data.token);
+  assert.equal(restored.me.departmentTemplateGuide.status,'completed');
+  assert.equal(restored.tasks.length,0);assert.deepEqual(restored.templates,promoted.templates);
+  const renamed=await api('renameMe',{clubId:f.clubId,name:'Guide admin'},login.data.token);assert.equal(renamed.member.departmentTemplateGuide.status,'completed');
+  assert.equal((await post('/api',{action:'dismissDepartmentTutorial',input},owner.token)).status,403);
 });

@@ -1,10 +1,13 @@
 import {tutorialKey,tutorialPreferences,canOfferTutorial,spotlightLayout} from '../shared/onboarding';
 import {documentKind} from '../shared/document-rules';
 import {resolveParticipants} from '../shared/assignments';
+import {departmentTutorialKey,canOfferDepartmentTutorial} from '../shared/department-tutorial';
+import {isAdmin} from '../shared/permissions';
+import {departmentSteps} from './department-tutorial';
 
-// Every selector points to the normal workspace controls. The guide never submits,
-// synthesizes clicks, fills a draft, or creates a server-side task.
-const steps=[
+// Member practice uses the user’s draft; the department guide uses local examples.
+// Neither guide submits a form or creates server-side tasks/templates.
+const memberSteps=[
   {id:'calendar',page:'board',target:'[data-tour="calendar-open"]',title:'先看安排，再发起任务',text:'这是月历入口：按日期看活动和截止事项。点击高亮的「展开日历」，试试日 / 周视图。全程可跳过，以后从「新手指南」重开。',action:'a[href="#/calendar"]'},
   {id:'planner',page:'calendar',target:'.planner-toolbar',title:'在真实日历中切换日 / 周',text:'试着点「日」或「周」，切换日期或截止范围。活动是时间块，DDL 是截止事项；所有时间均为北京时间。',next:'看看日历导出'},
   {id:'export',page:'calendar',target:'.planner-foot',title:'预约日历与个人日历',text:'「预约总览」打开 club-booking，预约活动也会出现在本站（不含课程）。.ics 导出自己的活动与待办，是当前快照，变化后需重新导出。',next:'认识经验档案'},
@@ -30,13 +33,15 @@ const steps=[
 ];
 const focusable='a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]';
 
-export function createTutorial({navigate,hasDocumentDraft}) {
+export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()=>{},onDepartmentExit=()=>{}}) {
   // Create the overlay from the versioned bundle, including for cached older HTML.
   const overlay=document.createElement('div');overlay.id='member-guide';overlay.hidden=true;
   overlay.innerHTML='<div class="guide-shade"></div><div class="guide-shade"></div><div class="guide-shade"></div><div class="guide-shade"></div><div class="guide-outline"></div><section class="guide-coach" role="region" aria-label="新手操作指南"></section>';
   document.body.append(overlay);
   const card=overlay.querySelector('.guide-coach'),outline=overlay.querySelector('.guide-outline'),shades=[...overlay.querySelectorAll('.guide-shade')];
   const preferences=tutorialPreferences(()=>window.localStorage);
+  let kind='member',steps=memberSteps,clubId='',startedAccount='';
+  const guideKey=(accountId,id)=>kind==='department'?departmentTutorialKey(accountId,id):tutorialKey(accountId,id);
   let state,account,key='',index=-1,childIndex=-1,target,frame=0,painted=-1,returnFocus,inerted=[],pendingPage='',history=[],cursor=0,readUrl='',canWrite=false;
   const stepIndex=id=>steps.findIndex(step=>step.id===id);
   const active=()=>index>=0;
@@ -52,16 +57,22 @@ export function createTutorial({navigate,hasDocumentDraft}) {
   function stop(completed=false,remember=true) {
     if(!active())return;
     if(remember)preferences.dismiss(key,completed);
+    const department=kind==='department',dismissedClub=clubId;
     index=-1;painted=-1;pendingPage='';target=null;overlay.hidden=true;releaseInert();
     document.body.classList.remove('member-guide-active');
     const focus=returnFocus?.isConnected?returnFocus:document.querySelector('[data-action="tutorial"]');
     focus?.focus({preventScroll:true});
+    if(department){onDepartmentExit({clubId:dismissedClub,accountId:startedAccount,remember});if(remember)onDepartmentDismiss({clubId:dismissedClub,completed});}
   }
   function findTarget() {
     const step=steps[index];
-    const scope=step.child?document.querySelector(`[data-step-panel="${childIndex}"]`):document;
+    if(kind==='department'&&step.childIndex!==undefined){
+      const panel=document.querySelector(`[data-step-panel="${step.childIndex}"]`);
+      if(panel){panel.open=true;state.openSteps?.add(step.childIndex);}
+    }
+    const scope=step.childIndex!==undefined?document.querySelector(`[data-step-panel="${step.childIndex}"]`):step.child?document.querySelector(`[data-step-panel="${childIndex}"]`):document;
     const selector=step.id==='experience-contribute'&&state.experience?.canWrite?'[data-action="experienceDocumentNew"]':step.target;
-    return [...scope?.querySelectorAll(selector)||[]].find(el=>el.getClientRects().length);
+    return [...scope?.querySelectorAll(selector)||[]].find(el=>el.getClientRects().length) || (kind==='department'&&state.editBoard?document.querySelector('.editor-pane .page'):null);
   }
   function position() {
     if(!active()||!target?.isConnected)return;
@@ -81,7 +92,7 @@ export function createTutorial({navigate,hasDocumentDraft}) {
     if(!found) {target=null;releaseInert();overlay.hidden=true;return;}
     if(changed) {
       painted=paintKey;
-      card.innerHTML=`<div class="guide-top"><span class="eyebrow">操作指南 · ${index+1} / ${steps.length}</span><button type="button" class="plain small" data-guide="skip">跳过</button></div><h2 tabindex="-1">${step.title}</h2><p>${step.text}</p><div class="guide-actions"><button type="button" class="secondary" data-guide="previous" ${cursor===0?'disabled':''}>上一步</button>${step.next?`<button type="button" class="primary" data-guide="next">${step.next}</button>`:'<span class="guide-prompt">↖ 请操作高亮区域，完成后自动继续</span>'}</div>`;
+      card.innerHTML=`<div class="guide-top"><span class="eyebrow">${kind==='department'?'模板设置教程':'操作指南'} · ${index+1} / ${steps.length}</span><button type="button" class="plain small" data-guide="skip">跳过</button></div><h2 tabindex="-1">${step.title}</h2><p>${step.text}</p><div class="guide-actions"><button type="button" class="secondary" data-guide="previous" ${cursor===0?'disabled':''}>上一步</button>${step.next?`<button type="button" class="primary" data-guide="next">${step.next}</button>`:'<span class="guide-prompt">↖ 请操作高亮区域，完成后自动继续</span>'}</div>`;
     }
     if(!step.next&&resume) {
       card.querySelector('.guide-prompt')?.remove();
@@ -93,6 +104,7 @@ export function createTutorial({navigate,hasDocumentDraft}) {
     if(next)next.disabled=!!state.busy||(step.page==='experience'&&!state.experience)||!!step.ready&&!step.ready(state,childIndex);
     card.querySelector('[data-guide="previous"]').disabled=cursor===0||!!state.busy;
     target=found;overlay.hidden=false;isolate(target);
+    if(kind==='department'&&!step.interactive&&!target.inert){target.inert=true;inerted.push(target);}
     if(changed) {
       target.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
       card.querySelector('h2').focus({preventScroll:true});
@@ -107,7 +119,7 @@ export function createTutorial({navigate,hasDocumentDraft}) {
     const page=step.page;
     pendingPage=page;
     if(page!==state.page && !(page==='board'&&state.page==='mine')) {
-      navigate(page==='experience'&&step.id==='experience-read'?(readUrl||'/experience'):'/'+page,{restoreDocument:!!step.writeOnly});return;
+      navigate(kind==='department'?'/'+page+(['edit','template-edit'].includes(page)?'?guide=department':''):page==='experience'&&step.id==='experience-read'?(readUrl||'/experience'):'/'+page,{restoreDocument:!!step.writeOnly});return;
     }
     if(directory&&state.experienceDocument){navigate('/experience');return;}
     if(needsDoc&&!state.experienceDocument){navigate(step.id==='experience-read'?(readUrl||'/experience'):'/experience',{restoreDocument:!!step.writeOnly});return;}
@@ -133,16 +145,21 @@ export function createTutorial({navigate,hasDocumentDraft}) {
     }
     moveTo(nextIndex);
   }
-  function open(s,accountId) {
+  function open(s,accountId,requestedKind='member') {
     if(active()||document.querySelector('dialog[open]'))return;
     state=s;account=accountId;
     const club=s.sync?.board?.club || s.editBoard?.club;
-    key=tutorialKey(accountId,club?.id);
+    if(requestedKind==='department'&&!isAdmin((s.sync?.board||s.editBoard)?.me?.role))return;
+    if(requestedKind==='member'&&s.guidePractice)return;
+    kind=requestedKind;steps=kind==='department'?departmentSteps:memberSteps;clubId=club?.id;startedAccount=accountId;
+    card.setAttribute('aria-label',kind==='department'?'模板设置教程':'新手操作指南');
+    key=guideKey(accountId,clubId);
     if(!key)return;
-    index=['board','mine'].includes(s.page)?0:s.page==='calendar'?1:s.page==='experience'&&!s.experienceDocument?stepIndex('experience-search'):s.page==='edit'&&!s.id&&!s.parentId?stepIndex('title'):-1;
+    index=kind==='department'?0:['board','mine'].includes(s.page)?0:s.page==='calendar'?1:s.page==='experience'&&!s.experienceDocument?stepIndex('experience-search'):s.page==='edit'&&!s.id&&!s.parentId?stepIndex('title'):-1;
     if(!active())return;
     returnFocus=document.activeElement;painted=-1;pendingPage='';history=[index];cursor=0;childIndex=(s.steps?.length||0)-1;readUrl='';canWrite=!!s.experience?.canWrite;
-    document.body.classList.add('member-guide-active');paint();
+    document.body.classList.add('member-guide-active');
+    if(kind==='department')moveTo(0);else paint();
   }
   overlay.addEventListener('click',event=>{
     const action=event.target.closest('[data-guide]')?.dataset.guide;
@@ -169,13 +186,13 @@ export function createTutorial({navigate,hasDocumentDraft}) {
     }
   });
   document.addEventListener('submit',event=>{
-    if(active()&&(event.target.id==='task-form'||event.target.dataset.form?.startsWith('experience'))){event.preventDefault();event.stopImmediatePropagation();}
+    if(active()&&(event.target.id==='task-form'||event.target.id==='template-form'||event.target.dataset.form?.startsWith('experience'))){event.preventDefault();event.stopImmediatePropagation();}
   },true);
   document.addEventListener('input',()=>{if(active())paint();});
   document.addEventListener('keydown',event=>{
     if(!active())return;
     if(event.key==='Escape'){event.preventDefault();event.stopPropagation();stop();return;}
-    if(event.key==='Enter'&&event.target.matches('#task-form input')){event.preventDefault();return;}
+    if(event.key==='Enter'&&event.target.matches('#task-form input,#template-form input')){event.preventDefault();return;}
     if(event.key==='Tab') {
       const elements=[...target?.querySelectorAll(focusable)||[],...(target?.matches(focusable)?[target]:[]),...card.querySelectorAll(focusable)].filter(el=>el.getClientRects().length&&!el.disabled&&!el.closest('[inert]'));
       if(!elements.length)return;
@@ -195,7 +212,8 @@ export function createTutorial({navigate,hasDocumentDraft}) {
     state=s;account=accountId;
     if(s.experience)canWrite=!!s.experience.canWrite;
     if(active()) {
-      const nextKey=tutorialKey(account,(s.sync?.board?.club||s.editBoard?.club)?.id);
+      const nextKey=guideKey(account,(s.sync?.board?.club||s.editBoard?.club)?.id);
+      if(kind==='department'&&!isAdmin(s.sync?.board?.me?.role)){stop(false,false);return;}
       if(key!==nextKey){stop(false,false);return;}
       // A user's back/forward navigation ends the guide instead of trapping them.
       const expected=steps[index].page;
@@ -211,6 +229,8 @@ export function createTutorial({navigate,hasDocumentDraft}) {
       if(steps[index].id==='experience-contribute'&&s.experienceDocument?.editing&&!s.busy){advance(true);return;}
       paint();return;
     }
-    if(canOfferTutorial(s,accountId)&&!preferences.seen(tutorialKey(accountId,s.sync.board.club.id))&&!document.querySelector('dialog[open],#app form')&&!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]'))open(s,accountId);
+    const safe=!document.querySelector('dialog[open],#app form')&&!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]');
+    if(safe&&canOfferDepartmentTutorial(s,accountId)&&!preferences.seen(departmentTutorialKey(accountId,s.sync.board.club.id))){open(s,accountId,'department');return;}
+    if(safe&&canOfferTutorial(s,accountId)&&!preferences.seen(tutorialKey(accountId,s.sync.board.club.id)))open(s,accountId);
   }};
 }

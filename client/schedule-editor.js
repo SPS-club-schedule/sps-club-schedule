@@ -2,7 +2,7 @@ import { button, field, e } from './ui';
 import { durationText, validDurationMinutes, MAX_DURATION_MINUTES } from '../shared/template-duration';
 
 export function templateDurationEditor(form) {
-  return `<div class="field"><div class="label">主任务默认时间</div><div class="chips">${[[false,'仅截止时间'],[true,'默认持续时长']].map(([enabled,label])=>button('templateDuration',label,'chip '+(!!form.templateHasDuration===enabled?'active':''),`data-value="${enabled}" aria-pressed="${!!form.templateHasDuration===enabled}"`)).join('')}</div>${form.templateHasDuration?`<div class="row space">${field('durationHours','小时',form.durationHours,'number',`required min="0" max="${MAX_DURATION_MINUTES/60}" step="1"`)}${field('durationMinutesPart','分钟',form.durationMinutesPart,'number','required min="0" max="59" step="1"')}</div><p class="hint">使用模板时选择开始时间，结束时间按此时长自动计算；跨天也会自动换算。子任务仍只设置截止时间。</p>`:'<p class="hint">使用时默认只设置截止时间，也可为本次任务开启持续时段。</p>'}</div>`;
+  return `<div class="field" data-tour="template-duration"><div class="label">主任务默认时间</div><div class="chips">${[[false,'仅截止时间'],[true,'默认持续时长']].map(([enabled,label])=>button('templateDuration',label,'chip '+(!!form.templateHasDuration===enabled?'active':''),`data-value="${enabled}" aria-pressed="${!!form.templateHasDuration===enabled}"`)).join('')}</div>${form.templateHasDuration?`<div class="row space">${field('durationHours','小时',form.durationHours,'number',`required min="0" max="${MAX_DURATION_MINUTES/60}" step="1"`)}${field('durationMinutesPart','分钟',form.durationMinutesPart,'number','required min="0" max="59" step="1"')}</div><p class="hint">使用模板时选择开始时间，结束时间按此时长自动计算；跨天也会自动换算。子任务仍只设置截止时间。</p>`:'<p class="hint">使用时默认只设置截止时间，也可为本次任务开启持续时段。</p>'}</div>`;
 }
 
 function locationEditor(form, connected) {

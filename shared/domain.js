@@ -20,7 +20,8 @@ function text(value, label, max, optional) {
   return clean;
 }
 const safeMember = m => m.archived ? { id: m._id, archived: true, syncVersion: m.syncVersion } : ({ id: m._id, name: m.name, role: m.role, department: m.department || '', joinedAt: m.joinedAt, syncVersion: m.syncVersion || 0 });
-const publicMember = (m, viewer) => ({...safeMember(m), ...(!m.archived && m._id!==viewer._id ? {role:isAdmin(m.role)?'admin':'member'} : {})});
+const selfMember = m => ({...safeMember(m),...(!m.archived&&m.departmentTemplateGuide?{departmentTemplateGuide:m.departmentTemplateGuide}:{})});
+const publicMember = (m, viewer) => m._id===viewer._id ? selfMember(m) : ({...safeMember(m), ...(!m.archived ? {role:isAdmin(m.role)?'admin':'member'} : {})});
 // Older memberships have no archived field. Only explicit tombstones are removed.
 const activeMembers = async (db, fields) => (await db.find('members', fields)).filter(m => !m.archived);
 const safeClub = c => ({ id: c._id, name: c.name, inviteVersion: c.inviteVersion || 0 });
@@ -175,7 +176,7 @@ function createService({ store, now, randomId, hash }) {
       store.find('templates', { clubId: club._id, archived: false })
     ]);
     return {
-      full: true, version, club: safeClub(club), me: safeMember(members.find(m => m._id === me._id) || me),
+      full: true, version, club: safeClub(club), me: selfMember(members.find(m => m._id === me._id) || me),
       members: members.map(m=>publicMember(m,me)).sort((a, b) => a.joinedAt - b.joinedAt),
       tasks: tasks.sort((a, b) => a.dueAt - b.dueAt), templates
     };
@@ -212,7 +213,7 @@ function createService({ store, now, randomId, hash }) {
       // Tabs opened before member deletion shipped cannot merge tombstones.
       if (input.memberTombstones !== true && members.some(m => m.archived)) return snapshot(club, me);
       // Archived documents (including members) are tombstones needed by deltas.
-      return { full: false, version, club: safeClub(club), me: safeMember(members.find(m => m._id === me._id) || me), members: members.map(m=>publicMember(m,me)), tasks, templates };
+      return { full: false, version, club: safeClub(club), me: selfMember(members.find(m => m._id === me._id) || me), members: members.map(m=>publicMember(m,me)), tasks, templates };
     },
     async createClub(input, identity) {
       const name = text(input.name, '社团名称', 30);
@@ -294,11 +295,24 @@ function createService({ store, now, randomId, hash }) {
       const name = text(input.name, '社团内称呼', 20);
       return store.transaction(async tx => {
         const me = await member(tx, input.clubId, identity);
-        if (me.name === name) return unchanged(tx, input.clubId, { member: safeMember(me) });
+        if (me.name === name) return unchanged(tx, input.clubId, { member: selfMember(me) });
         const change = await stamp(tx, input.clubId, 'members');
         const updated = Object.assign({}, me, { name, syncVersion: change.version });
         await tx.put('members', me._id, updated);
-        return Object.assign(change, { member: safeMember(updated) });
+        return Object.assign(change, { member: selfMember(updated) });
+      });
+    },
+    async dismissDepartmentTutorial(input, identity) {
+      if(input.version!==1 || !['skipped','completed'].includes(input.status))fail('VALIDATION','教程记录无效');
+      return store.transaction(async tx=>{
+        const me=await member(tx,input.clubId,identity);
+        if(!isAdmin(me.role))fail('FORBIDDEN','仅管理员可以记录模板教程状态');
+        const previous=me.departmentTemplateGuide;
+        if(previous?.version===input.version&&(previous.status==='completed'||previous.status===input.status))return unchanged(tx,input.clubId,{member:selfMember(me)});
+        const change=await stamp(tx,input.clubId,'members');
+        const updated={...me,departmentTemplateGuide:{version:input.version,status:input.status,at:now()},syncVersion:change.version};
+        await tx.put('members',me._id,updated);
+        return {...change,member:selfMember(updated)};
       });
     },
     async createTemplate(input, identity) {

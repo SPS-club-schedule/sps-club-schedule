@@ -33,7 +33,7 @@ export function tutorialDrafts() {
   return {
     capture(s,key) {
       if(!key)return;
-      if(s.page==='edit'&&!s.id&&!s.parentId&&s.editBoard) {
+      if(s.page==='edit'&&!s.guidePractice&&!s.id&&!s.parentId&&s.editBoard) {
         const fields=['form','steps','openSteps','requestId','selectedTemplate','appliedTemplate'];
         tasks.set(key,structuredClone(Object.fromEntries(fields.map(k=>[k,s[k]]))));
       }

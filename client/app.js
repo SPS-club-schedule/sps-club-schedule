@@ -19,13 +19,25 @@ import {experienceRoute} from './experience';
 import {startReleaseUpdates} from './release-updates';
 import {createTutorial} from './onboarding';
 import {tutorialDrafts,tutorialKey} from '../shared/onboarding';
+import {VERSION as DEPARTMENT_GUIDE_VERSION,departmentTutorialKey,departmentPracticeDrafts} from '../shared/department-tutorial';
 import {documentKind,documentTemplate,MAX_DOCUMENT_BYTES,documentDirty,readDocument,loadDocumentRenderer,previewDocument} from './experience-document';
 const root = document.getElementById('app');
-const guideDrafts=tutorialDrafts();
+const guideDrafts=tutorialDrafts(),practiceDrafts=departmentPracticeDrafts();
 let guideRestoreDocument;
 const guideKey=()=>tutorialKey(api.user()?.id,api.clubId());
-const tutorial=createTutorial({hasDocumentDraft:()=>guideDrafts.hasDocument(guideKey()),navigate:(path,{restoreDocument=false}={})=>{
+const practiceKey=()=>departmentTutorialKey(api.user()?.id,api.clubId());
+const tutorial=createTutorial({
+  hasDocumentDraft:()=>guideDrafts.hasDocument(guideKey()),
+  onDepartmentDismiss:({clubId,completed})=>{
+    api.call('dismissDepartmentTutorial',{clubId,version:DEPARTMENT_GUIDE_VERSION,status:completed?'completed':'skipped'}).catch(()=>toast('教程状态已记在本机，云端暂未同步'));
+  },
+  onDepartmentExit:({clubId,accountId,remember})=>{
+    practiceDrafts.clear(departmentTutorialKey(accountId,clubId));
+    if(remember&&s.guidePractice&&api.clubId()===clubId&&api.user()?.id===accountId)go('/templates');
+  },
+  navigate:(path,{restoreDocument=false}={})=>{
   guideDrafts.capture(s,guideKey());
+  practiceDrafts.capture(s,practiceKey());
   guideRestoreDocument=restoreDocument;
   // The draft was parked above and will be restored on return, not discarded.
   if(s.experienceDocument?.editing)s.experienceDocument=null;
@@ -179,6 +191,8 @@ async function route() {
   if(page==='calendar')workspaceUi.calendarOpen=true;
   if(['auth','entry','reset'].includes(page)){workspaceUi.calendarOpen=false;workspaceUi.planner.scope=undefined;}
   s = { page, id: url.searchParams.get('id'), parentId: url.searchParams.get('parent'), selectedTemplate: url.searchParams.get('template') || '', steps: [], openSteps: new Set(), authMode: invitation ? 'register' : 'login', joinMode: 'join', form: { invite: invitation || '', name: 'SPS 社团日程' }, sync: api.sync.getState(), filter: page === 'mine' ? 'pending' : 'all', search: '', busy: false, error: '', requestId: api.requestId(),plannerSettings:workspaceUi.planner,booking:s.booking,bookingCheckedAt:s.bookingCheckedAt,experience:page==='experience'&&s.page==='experience'&&s.experienceViewer===(api.user()?.id||'')?s.experience:undefined,experienceViewer:api.user()?.id||'' };
+  s.guidePractice=['edit','template-edit'].includes(page)&&url.searchParams.get('guide')==='department';
+  if(s.guidePractice){s.id=null;s.parentId=null;s.selectedTemplate='';}
   s.afterAuth=url.searchParams.get('next')==='experience'?'/experience':'';
   if(page==='experience'){try{s.experiencePath=archivePath(url.searchParams.get('folder')||'',{empty:true});}catch{s.experiencePath='';}s.experienceForm={};s.experienceFiles=[];s.experienceDocumentId=url.searchParams.get('document');}
   if (page==='reset') {
@@ -222,12 +236,12 @@ async function route() {
       s.form = { title: task?.title || '', description: task?.description || '', date: p.date, time: task || parent ? p.time : '20:00', mode: task?.mode || 'individual', priority: task?.priority || 'normal', participantIds: task?.participantIds.slice() || (parent ? [] : b.members.map(m=>m.id)) };
       Object.assign(s.form,scheduleDraft(task));
       if (!task && !parent && s.selectedTemplate) applyTemplate();
-      if(!task&&!parent&&!s.selectedTemplate)Object.assign(s,guideDrafts.takeTask(guideKey())||{});
+      if(!task&&!parent&&!s.selectedTemplate&&!s.guidePractice)Object.assign(s,guideDrafts.takeTask(guideKey())||{});
       s.steps=normalizeStepDependencies(s.steps);
     }
     if (page === 'template-edit') {
       if (!b.club) { go('/entry'); return; }
-      const id=s.id || url.searchParams.get('copy');
+      const id=s.guidePractice?null:s.id || url.searchParams.get('copy');
       const template=id ? (b.templates || []).find(t=>t._id===id) : null;
       if (id&&!template) throw new Error('模板不存在或已归档');
       s.revision=template?.revision;
@@ -236,6 +250,10 @@ async function route() {
       const { steps, ...main }=draft;
       s.form={...main,...templateDurationForm(template?.durationMinutes),name:template?(s.id?template.name:template.name.slice(0,76)+'（副本）'):'',category:template?.category || '未分类'};
       s.editBoard = b;
+    }
+    if(s.guidePractice) {
+      if(!isAdmin(b.me?.role))throw new Error('模板教程仅供管理员进入');
+      Object.assign(s,practiceDrafts.restore(page,practiceKey(),b.members));
     }
     render();
     if(['edit','template-edit'].includes(page))stop=api.sync.watch(receive);
@@ -411,6 +429,7 @@ root.addEventListener('input', inputChanged);
 root.addEventListener('change', inputChanged);
 root.addEventListener('submit', event => {
   event.preventDefault(); const kind = event.target.dataset.form;
+  if(s.guidePractice&&['task','template'].includes(kind)){toast('这是本地练习，请返回模板库后正式创建');return;}
   if(kind?.startsWith('experience')){submitExperience(kind,event);return;}
   const data = { ...s.form, ...Object.fromEntries(new FormData(event.target)) };
   perform(async () => {
@@ -474,6 +493,7 @@ root.addEventListener('click', event => {
   const { action, value, id } = el.dataset;
   if (s.busy) return;
   if(action==='tutorial'){tutorial.open(s,api.user()?.id);return;}
+  if(action==='departmentTutorial'){practiceDrafts.clear(practiceKey());tutorial.open(s,api.user()?.id,'department');return;}
   if(action.startsWith('experience')){experienceAction(action,id);return;}
   if(action==='closePlanner'){workspaceUi.calendarOpen=false;if(s.page==='calendar')go('/'+(workspaceUi.context==='mine'?'mine':'board'));else render();return;}
   if(action==='plannerMove'){workspaceUi.planner.date=shiftDate(workspaceUi.planner.date,Number(value)*(workspaceUi.planner.mode==='day'?1:7));render();return;}
