@@ -1,5 +1,6 @@
 const DAY = 86400000;
 const MAX_STEPS = 20;
+const MAX_ROLES = 20;
 const { parseDeadline } = require('./view');
 const { resolveParticipants } = require('./assignments');
 function seminarTemplate() {
@@ -21,9 +22,9 @@ function relativeDeadline(mainDueAt, daysBefore) {
 function templateDraft(template, members) {
   const ids = new Set(members.map(m => m.id));
   const copy = item => ({ title: item.title, description: item.description, mode: item.mode, priority: item.priority, participantDepartment: item.participantDepartment || '', participantIds: resolveParticipants({ ...item, followMain: false }, members).filter(id => ids.has(id)) });
-  return { ...copy(template), durationMinutes:template.durationMinutes ?? null, steps: template.steps.map(step => ({ ...copy(step), followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
+  return { ...copy(template), roles:(template.roles || []).map(role=>({id:role.id,name:role.name,participantIds:[],participantDepartment:''})), durationMinutes:template.durationMinutes ?? null, steps: template.steps.map(step => ({ ...copy(step), roleId:step.roleId || '', followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
 }
 function draftDeadline(main, step) {
   return step.customDeadline ? parseDeadline(step.date, step.time) : relativeDeadline(parseDeadline(main.date, main.time), step.daysBefore);
 }
-module.exports = { DAY, MAX_STEPS, seminarTemplate, relativeDeadline, templateDraft, draftDeadline };
+module.exports = { DAY, MAX_STEPS, MAX_ROLES, seminarTemplate, relativeDeadline, templateDraft, draftDeadline };

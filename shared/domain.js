@@ -1,5 +1,5 @@
 'use strict';
-const { seminarTemplate, relativeDeadline, MAX_STEPS } = require('./templates');
+const { seminarTemplate, relativeDeadline, MAX_STEPS, MAX_ROLES } = require('./templates');
 const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments');
 const { isAdmin } = require('./permissions');
 const { resolveParticipants } = require('./assignments');
@@ -67,17 +67,33 @@ function createService({ store, now, randomId, hash }) {
     return { title: text(input.title, '任务名称', 80), description: text(input.description || '', '任务说明', 2000, true), priority: input.priority };
   }
   function canManage(task, me) { return task.creatorId === me._id || task.parentCreatorId === me._id || me.role === 'owner'; }
-  function assignment(input, roster, { optional = false, template = false, main = null } = {}) {
+  function assignment(input, roster, { optional = false, template = false, main = null, roles = [] } = {}) {
     if (!['individual', 'shared'].includes(input.mode)) fail('VALIDATION', '请选择完成方式');
     const department = input.participantDepartment === undefined ? '' : input.participantDepartment;
     if (!validDepartment(department)) fail('VALIDATION', '请选择有效的负责部门');
     if (input.followMain !== undefined && typeof input.followMain !== 'boolean') fail('VALIDATION', '请选择有效的负责人设置');
     if (input.followMain && (!main || department)) fail('VALIDATION', '仅子任务可跟随主任务负责人，且不能同时指定部门');
+    const roleId = input.roleId === undefined ? '' : input.roleId;
+    if (typeof roleId !== 'string' || (roleId && (!main || !roles.some(role=>role.id===roleId)))) fail('VALIDATION', '请选择模板中已有的角色');
+    if (roleId && (department || input.followMain)) fail('VALIDATION', '按角色分配不能同时跟随主任务或指定部门');
     if (!Array.isArray(input.participantIds) || input.participantIds.length > 200) fail('VALIDATION', '负责人名单格式无效或超过200人');
-    const participantIds = template && (department || input.followMain) ? [] : [...new Set(resolveParticipants(input, roster, main))];
+    const participantIds = template && (department || input.followMain || roleId) ? [] : [...new Set(resolveParticipants(input, roster, main ? {...main, roles} : null))];
+    if (!optional && roleId && !participantIds.length) fail('VALIDATION', `请为角色「${roles.find(role=>role.id===roleId).name}」选择负责人`);
     if ((!optional && !participantIds.length) || participantIds.length > 200) fail('VALIDATION', department ? `${departmentLabel(department)}须有1—200位成员才能分配任务` : '请为每项任务选择1—200位负责人');
     if (participantIds.some(id => !roster.some(m => m._id === id))) fail('VALIDATION', '负责人必须是本社团成员');
-    return { mode: input.mode, participantIds, ...(template ? { participantDepartment: department, ...(main ? { followMain: input.followMain === true } : {}) } : {}) };
+    return { mode: input.mode, participantIds, ...(template ? { participantDepartment: department, ...(main ? { followMain: input.followMain === true, roleId } : {}) } : {}) };
+  }
+  function templateRoles(input) {
+    if (input === undefined) return [];
+    if (!Array.isArray(input) || input.length > MAX_ROLES) fail('VALIDATION', `模板最多设置${MAX_ROLES}个角色`);
+    const ids=new Set(), names=new Set();
+    return input.map(role=>{
+      if (!role || typeof role !== 'object' || typeof role.id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(role.id) || ids.has(role.id)) fail('VALIDATION','角色标识无效或重复，请重新添加角色');
+      const name=text(role.name,'角色名称',30), key=name.toLocaleLowerCase();
+      if (names.has(key)) fail('VALIDATION','角色名称不能重复');
+      ids.add(role.id); names.add(key);
+      return {id:role.id,name};
+    });
   }
   function offset(value) {
     if (!Number.isInteger(value) || value < 0 || value > 365) fail('VALIDATION', '提前天数须为0—365的整数');
@@ -85,16 +101,19 @@ function createService({ store, now, randomId, hash }) {
   }
   function templateContent(input, roster, previous = null) {
     if (!Array.isArray(input.steps) || !input.steps.length || input.steps.length > MAX_STEPS) fail('VALIDATION', `模板须包含1—${MAX_STEPS}项子任务`);
+    // Old editors cannot safely match reordered steps to their role bindings.
+    if (input.roles === undefined && previous?.roles?.length) fail('CONFLICT','此模板已设置角色分工，请刷新页面后重新编辑');
+    const roles=templateRoles(input.roles);
     const main = assignment(input, roster, { optional: true, template: true });
     const durationMinutes=input.durationMinutes===undefined?previous?.durationMinutes ?? null:input.durationMinutes;
     if (durationMinutes!==null && !validDurationMinutes(durationMinutes)) fail('VALIDATION','默认时长须为正整数分钟，且不能超过五年');
     return {
-      durationMinutes,
+      durationMinutes, roles,
       name: text(input.name, '模板名称', 80), category: text(input.category || '', '分类', 30, true) || '未分类',
       ...content(input), ...main,
       steps: input.steps.map(step => {
         if (!step || typeof step !== 'object') fail('VALIDATION', '子任务格式无效');
-        return { ...content(step), ...assignment(step, roster, { optional: true, template: true, main }), daysBefore: offset(step.daysBefore) };
+        return { ...content(step), ...assignment(step, roster, { optional: true, template: true, main, roles }), daysBefore: offset(step.daysBefore) };
       })
     };
   }
@@ -317,6 +336,7 @@ function createService({ store, now, randomId, hash }) {
         if (input.parentTaskId) fail('VALIDATION', '模板只能用于创建主任务');
         if (!Array.isArray(input.subtasks) || !input.subtasks.length || input.subtasks.length > MAX_STEPS) fail('VALIDATION', `请保留1—${MAX_STEPS}项子任务`);
         const roster = await activeMembers(tx, { clubId: input.clubId });
+        const roles=templateRoles(input.roles).map((role,index)=>({ ...role, ...assignment({...input.roles[index],mode:'individual'},roster,{optional:true}) , participantDepartment:input.roles[index].participantDepartment || '' }));
         const fields = { ...content(input), ...assignment(input, roster), ...schedule(input) };
         const {dueAt}=fields;
         let sourceTemplate;
@@ -332,7 +352,7 @@ function createService({ store, now, randomId, hash }) {
           const childDue = step.dueAt === undefined ? relativeDeadline(dueAt, daysBefore) : step.dueAt;
           if (!Number.isSafeInteger(childDue) || childDue <= now()) fail('VALIDATION', `子任务${index + 1}的截止时间已过，请调整日期或提前天数`);
           if (childDue > dueAt) fail('VALIDATION', `子任务${index + 1}不能晚于主任务截止`);
-          return { ...content(step), ...assignment(step, roster, { main: fields }), ...schedule({...step,dueAt:childDue},null,true), daysBefore };
+          return { ...content(step), ...assignment(step, roster, { main: fields, roles }), ...schedule({...step,dueAt:childDue},null,true), daysBefore };
         });
         const change = await stamp(tx, input.clubId, 'tasks');
         const common = { clubId: input.clubId, creatorId: me._id, createdAt: now(), updatedAt: now(), revision: 1, syncVersion: change.version, archived: false, completions: {}, sharedCompletion: null };

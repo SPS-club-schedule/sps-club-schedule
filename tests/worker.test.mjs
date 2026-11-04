@@ -402,3 +402,23 @@ test('template default duration survives SQLite restart, delta sync, copying and
   const cleared=await api('editTemplate',{...template,templateId:template._id,durationMinutes:null});
   assert.equal(cleared.template.durationMinutes,null);
 });
+
+test('template roles persist across SQLite restart and resolve atomically when publishing a group',async()=>{
+  const before=await api('bootstrap',{clubId}), base=before.templates[0];
+  const roles=[{id:'speaker',name:'主讲人'},{id:'poster',name:'海报制作人'}];
+  const {template}=await api('createTemplate',{...base,clubId,requestId:'roles-runtime-template',roles,steps:base.steps.map((step,i)=>({...step,roleId:i%2?'speaker':'poster',followMain:false,participantDepartment:''}))});
+  await mf.dispose(); mf=new Miniflare(options);
+  const saved=(await api('sync',{clubId,since:before.version})).templates.find(t=>t._id===template._id);
+  assert.deepEqual(saved.roles,roles); assert.equal(saved.steps[0].roleId,'poster');
+  const copy=await api('createTemplate',{...saved,requestId:'roles-runtime-copy'});
+  assert.deepEqual(copy.template.roles,roles);
+  const input={...saved,templateId:saved._id,clubId,requestId:'roles-runtime-group',participantIds:memberIds,dueAt:Date.now()+14*86400000,subtasks:saved.steps,roles:roles.map((role,i)=>({...role,participantIds:[memberIds[i]]}))};
+  const invalid=await post('/api',{action:'createTaskGroup',input:{...input,roles:input.roles.map(role=>({...role,participantIds:[]}))}},owner.token);
+  assert.equal(invalid.status,400);
+  const result=await api('createTaskGroup',input);
+  assert.deepEqual(result.tasks[1].participantIds,[memberIds[1]]);
+  assert.deepEqual(result.tasks[2].participantIds,[memberIds[0]]);
+  assert.deepEqual(result.tasks[3].participantIds,[memberIds[1]]);
+  assert.ok(result.tasks.every(task=>task.roles===undefined&&task.roleId===undefined));
+  assert.equal((await api('createTaskGroup',input)).taskId,result.taskId);
+});

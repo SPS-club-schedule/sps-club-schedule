@@ -2,10 +2,10 @@ import * as api from './api';
 import * as views from './views';
 import { parts, taskView } from '../shared/view';
 import { shiftMonth } from '../shared/calendar';
-import { templateDraft, draftDeadline, MAX_STEPS } from '../shared/templates';
+import { templateDraft, draftDeadline, MAX_STEPS, MAX_ROLES } from '../shared/templates';
 import { isAdmin } from '../shared/permissions';
 import { departmentLabel, invitationToken } from '../shared/departments';
-import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain } from '../shared/assignments';
+import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain, setRole, removeRole } from '../shared/assignments';
 import { scheduleDraft, enableDuration, followStart, followDuration, applyTemplateDuration, changeScheduleField, scheduleFields } from '../shared/schedule-draft';
 import { templateDurationForm, templateDurationValue } from '../shared/template-duration';
 import {personalCalendar} from '../shared/ical';
@@ -228,7 +228,7 @@ async function route() {
       const template=id ? (b.templates || []).find(t=>t._id===id) : null;
       if (id&&!template) throw new Error('模板不存在或已归档');
       s.revision=template?.revision;
-      const draft=template?templateDraft(template,b.members):{title:'',description:'',mode:'individual',priority:'normal',participantIds:[],steps:[]};
+      const draft=template?templateDraft(template,b.members):{title:'',description:'',mode:'individual',priority:'normal',participantIds:[],roles:[],steps:[]};
       s.steps=draft.steps;
       const { steps, ...main }=draft;
       s.form={...main,...templateDurationForm(template?.durationMinutes),name:template?(s.id?template.name:template.name.slice(0,76)+'（副本）'):'',category:template?.category || '未分类'};
@@ -387,10 +387,15 @@ function inputChanged(event) {
     if(name==='plannerDeadlines')workspaceUi.planner.showDeadlines=event.target.checked;
     if(event.type==='change')render();return;
   }
-  const {step,field}=event.target.dataset;
-  if (step!==undefined) {
+  const {step,field,role}=event.target.dataset;
+  if (role!==undefined) {
+    if (!s.form.roles?.[Number(role)]) return;
+    s.form.roles[Number(role)].name=value;
+    if (event.type==='change') render();
+  } else if (step!==undefined) {
     if (!s.steps[Number(step)]) return;
-    s.steps[Number(step)][field]=field==='daysBefore'&&value!==''?Number(value):value;
+    if (field==='roleId') setRole(s.steps[Number(step)],value,s.form,s.editBoard.members);
+    else s.steps[Number(step)][field]=field==='daysBefore'&&value!==''?Number(value):value;
     if (field==='daysBefore') s.steps[Number(step)].customDeadline=false;
     if (event.type==='change') render();
   } else if (name==='selectedTemplate') s.selectedTemplate=value;
@@ -444,16 +449,16 @@ root.addEventListener('submit', event => {
       if (data.hasDuration && data.deadlineFollowsStart) followStart(data);
       const group=!s.id&&!s.parent&&s.steps.length>0;
       const subtasks=group?s.steps.map((step,index)=>{
-        if (!resolveParticipants(step,s.editBoard.members,data).length) { s.openSteps.add(index); throw new Error(`请为子任务${index+1}「${step.title}」选择负责人`); }
+        if (!resolveParticipants(step,s.editBoard.members,data).length) { s.openSteps.add(index); throw new Error(step.roleId?`请为角色「${data.roles.find(role=>role.id===step.roleId)?.name || '未命名'}」选择负责人`:`请为子任务${index+1}「${step.title}」选择负责人`); }
         const dueAt=draftDeadline(data,step);
         if(dueAt<=Date.now()) { s.openSteps.add(index); throw new Error(`子任务${index+1}「${step.title}」的截止时间已过，请调整日期或提前天数`); }
-        return {...taskFields(step),followMain:step.followMain === true,daysBefore:step.daysBefore,...(step.customDeadline?{dueAt}:{})};
+        return {...taskFields(step),roleId:step.roleId || '',followMain:step.followMain === true,daysBefore:step.daysBefore,...(step.customDeadline?{dueAt}:{})};
       }):undefined;
-      const result = await api.call(s.id?'editTask':group?'createTaskGroup':'createTask', { ...taskFields(data), ...scheduleFields(data), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId, ...(group?{subtasks,templateId:s.appliedTemplate?.id}:{}) });
+      const result = await api.call(s.id?'editTask':group?'createTaskGroup':'createTask', { ...taskFields(data), ...scheduleFields(data), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId, ...(group?{subtasks,roles:(data.roles || []).map(role=>({id:role.id,name:role.name,participantIds:role.participantIds,participantDepartment:role.participantDepartment || ''})),templateId:s.appliedTemplate?.id}:{}) });
       go('/task?id='+encodeURIComponent(result.taskId));
     }
     if (kind === 'template') {
-      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),durationMinutes:templateDurationValue(data),name:data.name,category:data.category,steps:s.steps.map(step=>({...taskFields(step),followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
+      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),durationMinutes:templateDurationValue(data),name:data.name,category:data.category,roles:(data.roles || []).map(role=>({id:role.id,name:role.name})),steps:s.steps.map(step=>({...taskFields(step),roleId:step.roleId || '',followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
       go('/templates'); toast('共享模板已保存');
     }
     if (kind === 'name') { await api.call('renameMe', { clubId: s.sync.board.club.id, name: data.nickname }); s.form.nickname = undefined; toast('称呼已更新'); }
@@ -480,6 +485,19 @@ root.addEventListener('click', event => {
       applyTemplate();
     }); return;
   }
+  if (action==='addRole') {
+    s.form.roles ||= [];
+    if (s.form.roles.length<MAX_ROLES) s.form.roles.push({id:api.requestId(),name:'',participantIds:[],participantDepartment:''});
+    render(); root.querySelector(`[name="role-${s.form.roles.length-1}-name"]`)?.focus(); return;
+  }
+  if (action==='removeRole') { removeRole(s.form,s.steps,id,s.editBoard.members); render(); return; }
+  if (action==='roleParticipant' || action==='roleDepartment') {
+    const role=s.form.roles?.[Number(el.dataset.index)];
+    if (!role) return;
+    if (action==='roleParticipant') toggleParticipant(role,id,s.editBoard.members);
+    else chooseDepartment(role,value,s.editBoard.members);
+    render(); return;
+  }
   if (['addStep','removeStep','stepUp','stepDown','stepParticipant','stepDepartment','stepFollow','stepCustom','stepRelative','assignStepsToMe'].includes(action)) {
     const index=Number(el.dataset.index), step=s.steps[index];
     if(action==='addStep'&&s.steps.length<MAX_STEPS) { s.steps.push({title:'',description:'',daysBefore:1,mode:'individual',priority:'normal',participantIds:[],customDeadline:false}); s.openSteps.add(s.steps.length-1); }
@@ -490,8 +508,11 @@ root.addEventListener('click', event => {
     }
     if(action==='stepParticipant') toggleParticipant(step,id,s.editBoard.members,s.form);
     if(action==='stepDepartment') chooseDepartment(step,value,s.editBoard.members);
-    if(action==='stepFollow') setFollowMain(step,value==='main',s.form,s.editBoard.members);
-    if(action==='assignStepsToMe') for(const item of s.steps) { item.participantIds=[s.editBoard.me.id]; item.participantDepartment=''; item.followMain=false; }
+    if(action==='stepFollow') {
+      if(value==='role' && s.form.roles?.length) setRole(step,step.roleId || s.form.roles[0].id,s.form,s.editBoard.members);
+      else setFollowMain(step,value==='main',s.form,s.editBoard.members);
+    }
+    if(action==='assignStepsToMe') for(const item of s.steps) { item.participantIds=[s.editBoard.me.id]; item.participantDepartment=''; item.followMain=false; item.roleId=''; }
     if(action==='stepRelative') step.customDeadline=false;
     if(action==='stepCustom') {
       try { const p=parts(draftDeadline(s.form,step)); Object.assign(step,{date:p.date,time:p.time,customDeadline:true}); }
