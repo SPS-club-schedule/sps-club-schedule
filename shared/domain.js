@@ -1,8 +1,9 @@
 'use strict';
 const { seminarTemplate, MAX_STEPS, MAX_ROLES } = require('./templates');
 const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments');
-const { isAdmin } = require('./permissions');
+const { isAdmin, isSpeaker, isCoreMember } = require('./permissions');
 const { resolveParticipants } = require('./assignments');
+const {resolveGuestNames,participantKeys,canProxyFor}=require('./guest-assignments');
 const { validDurationMinutes } = require('./template-duration');
 const { normalizeStepDependencies } = require('./step-dependencies');
 const { schedulingMode, planningFields, computeStepSchedule } = require('./backward-schedule');
@@ -21,7 +22,7 @@ function text(value, label, max, optional) {
 }
 const safeMember = m => m.archived ? { id: m._id, archived: true, syncVersion: m.syncVersion } : ({ id: m._id, name: m.name, role: m.role, department: m.department || '', joinedAt: m.joinedAt, syncVersion: m.syncVersion || 0 });
 const selfMember = m => ({...safeMember(m),...(!m.archived&&m.departmentTemplateGuide?{departmentTemplateGuide:m.departmentTemplateGuide}:{})});
-const publicMember = (m, viewer) => m._id===viewer._id ? selfMember(m) : ({...safeMember(m), ...(!m.archived ? {role:isAdmin(m.role)?'admin':'member'} : {})});
+const publicMember = (m, viewer) => m._id===viewer._id ? selfMember(m) : ({...safeMember(m), ...(!m.archived ? {role:isAdmin(m.role)?'admin':isSpeaker(m.role)?'speaker':'member'} : {})});
 // Older memberships have no archived field. Only explicit tombstones are removed.
 const activeMembers = async (db, fields) => (await db.find('members', fields)).filter(m => !m.archived);
 const safeClub = c => ({ id: c._id, name: c.name, inviteVersion: c.inviteVersion || 0 });
@@ -41,6 +42,7 @@ function createService({ store, now, randomId, hash }) {
     const task = await db.get('tasks', taskId);
     if (!task) fail('NOT_FOUND', '任务不存在');
     const me = await member(db, task.clubId, identity);
+    if(isSpeaker(me.role)&&!task.participantIds.includes(me._id))fail('FORBIDDEN','主讲人只能访问分配给自己的任务');
     return { task, me };
   }
   function deadline(value) {
@@ -69,8 +71,9 @@ function createService({ store, now, randomId, hash }) {
     if (!['normal', 'high'].includes(input.priority)) fail('VALIDATION', '请选择任务优先级');
     return { title: text(input.title, '任务名称', 80), description: text(input.description || '', '任务说明', 2000, true), priority: input.priority };
   }
-  function canManage(task, me) { return task.creatorId === me._id || task.parentCreatorId === me._id || me.role === 'owner'; }
-  function assignment(input, roster, { optional = false, template = false, main = null, roles = [] } = {}) {
+  function requireCore(me) {if(!isCoreMember(me.role))fail('FORBIDDEN','主讲人只能查看并完成分配给自己的任务');}
+  function canManage(task, me) { return isCoreMember(me.role)&&(task.creatorId === me._id || task.parentCreatorId === me._id || me.role === 'owner'); }
+  function assignment(input, roster, { optional = false, template = false, main = null, roles = [], coreOnly = false, speakersOnly = false } = {}) {
     if (!['individual', 'shared'].includes(input.mode)) fail('VALIDATION', '请选择完成方式');
     const department = input.participantDepartment === undefined ? '' : input.participantDepartment;
     if (!validDepartment(department)) fail('VALIDATION', '请选择有效的负责部门');
@@ -81,10 +84,14 @@ function createService({ store, now, randomId, hash }) {
     if (roleId && (department || input.followMain)) fail('VALIDATION', '按角色分配不能同时跟随主任务或指定部门');
     if (!Array.isArray(input.participantIds) || input.participantIds.length > 200) fail('VALIDATION', '负责人名单格式无效或超过200人');
     const participantIds = template && (department || input.followMain || roleId) ? [] : [...new Set(resolveParticipants(input, roster, main ? {...main, roles} : null))];
-    if (!optional && roleId && !participantIds.length) fail('VALIDATION', `请为角色「${roles.find(role=>role.id===roleId).name}」选择负责人`);
-    if ((!optional && !participantIds.length) || participantIds.length > 200) fail('VALIDATION', department ? `${departmentLabel(department)}须有1—200位成员才能分配任务` : '请为每项任务选择1—200位负责人');
-    if (participantIds.some(id => !roster.some(m => m._id === id))) fail('VALIDATION', '负责人必须是本社团成员');
-    return { mode: input.mode, participantIds, ...(template ? { participantDepartment: department, ...(main ? { followMain: input.followMain === true, roleId } : {}) } : {}) };
+    let guests=[];
+    try{guests=template?[]:resolveGuestNames(input,main?{...main,roles}:null);}catch(error){fail('VALIDATION',error.message);}
+    if(coreOnly&&(guests.length||participantIds.some(id=>isSpeaker(roster.find(m=>m._id===id)?.role))))fail('VALIDATION','核心成员角色只能选择社团成员，不能填写免注册姓名或选择主讲人');
+    if(speakersOnly&&participantIds.some(id=>!isSpeaker(roster.find(m=>m._id===id)?.role)))fail('VALIDATION','非核心角色请选择已注册主讲人，或直接填写免注册姓名');
+    if (!optional && roleId && !participantIds.length&&!guests.length) fail('VALIDATION', `请为角色「${roles.find(role=>role.id===roleId).name}」选择负责人或填写姓名`);
+    if ((!optional && !participantIds.length&&!guests.length) || participantIds.length+guests.length > 200) fail('VALIDATION', department ? `${departmentLabel(department)}须有1—200位参与者才能分配任务` : '请为每项任务选择或填写1—200位负责人');
+    if (participantIds.some(id => !roster.some(m => m._id === id))) fail('VALIDATION', '注册负责人必须属于当前社团');
+    return { mode: input.mode, participantIds, ...(guests.length?{guestParticipants:guests.map(name=>({id:'guest_'+hash(name).slice(0,24),name}))}:{}), ...(template ? { participantDepartment: department, ...(main ? { followMain: input.followMain === true, roleId } : {}) } : {}) };
   }
   function templateRoles(input) {
     if (input === undefined) return [];
@@ -95,7 +102,8 @@ function createService({ store, now, randomId, hash }) {
       const name=text(role.name,'角色名称',30), key=name.toLocaleLowerCase();
       if (names.has(key)) fail('VALIDATION','角色名称不能重复');
       ids.add(role.id); names.add(key);
-      return {id:role.id,name};
+      if(role.coreMember!==undefined&&typeof role.coreMember!=='boolean')fail('VALIDATION','角色成员类型无效');
+      return {id:role.id,name,...(role.coreMember===false?{coreMember:false}:{})};
     });
   }
   function offset(value) {
@@ -121,6 +129,7 @@ function createService({ store, now, randomId, hash }) {
     if (!Array.isArray(input.steps) || !input.steps.length || input.steps.length > MAX_STEPS) fail('VALIDATION', `模板须包含1—${MAX_STEPS}项子任务`);
     // Old editors cannot safely match reordered steps to their role bindings.
     if (input.roles === undefined && previous?.roles?.length) fail('CONFLICT','此模板已设置角色分工，请刷新页面后重新编辑');
+    if(previous?.roles?.some(role=>role.coreMember===false&&input.roles?.some(next=>next.id===role.id&&next.coreMember===undefined)))fail('CONFLICT','此模板包含非核心成员角色，请刷新后重新编辑');
     const roles=templateRoles(input.roles);
     const schedulingMode=planningMode(input,previous);
     const main = assignment(input, roster, { optional: true, template: true });
@@ -175,10 +184,14 @@ function createService({ store, now, randomId, hash }) {
       activeMembers(store, { clubId: club._id }), store.find('tasks', { clubId: club._id, archived: false }),
       store.find('templates', { clubId: club._id, archived: false })
     ]);
+    const viewer=members.find(m=>m._id===me._id)||me;
+    const visibleTasks=isSpeaker(viewer.role)?tasks.filter(task=>task.participantIds.includes(viewer._id)):tasks;
+    const related=new Set([viewer._id,...visibleTasks.flatMap(task=>[task.creatorId,...task.participantIds,...Object.values(task.completionActors||{}).map(record=>record.actorId),task.sharedCompletion?.actorId])]);
+    const visibleMembers=isSpeaker(viewer.role)?members.filter(m=>related.has(m._id)):members;
     return {
       full: true, version, club: safeClub(club), me: selfMember(members.find(m => m._id === me._id) || me),
-      members: members.map(m=>publicMember(m,me)).sort((a, b) => a.joinedAt - b.joinedAt),
-      tasks: tasks.sort((a, b) => a.dueAt - b.dueAt), templates
+      members: visibleMembers.map(m=>publicMember(m,viewer)).sort((a, b) => a.joinedAt - b.joinedAt),
+      tasks: visibleTasks.sort((a, b) => a.dueAt - b.dueAt), templates:isSpeaker(viewer.role)?[]:templates
     };
   }
   const actions = {
@@ -205,6 +218,9 @@ function createService({ store, now, randomId, hash }) {
       const since = input.since;
       if (!Number.isSafeInteger(since) || since < 0 || since > version) return snapshot(club, me);
       if (since === version) return { unchanged: true, version };
+      // Replacing the whole restricted board drops revoked assignments and stale
+      // data on demotion; promotion must restore older tasks, not just new deltas.
+      if(isSpeaker(me.role)||(me.taskVisibilityVersion||0)>since)return snapshot(club,me);
       const [members, tasks, templates] = await Promise.all([
         (club.membersVersion || 0) > since ? store.findSince('members', { clubId: input.clubId }, since) : [],
         (club.tasksVersion || 0) > since ? store.findSince('tasks', { clubId: input.clubId }, since) : [],
@@ -244,10 +260,11 @@ function createService({ store, now, randomId, hash }) {
         const id = memberKey(invite.clubId, identity);
         const existing = await tx.get('members', id);
         if (existing?.archived) fail('FORBIDDEN', '此账号已删除，请重新注册');
+        if(existing&&((isSpeaker(existing.role)&&department&&department!=='speaker')||(!isSpeaker(existing.role)&&department==='speaker')))fail('CONFLICT','身份变更请联系管理员');
         if (department && existing?.department && existing.department !== department) fail('CONFLICT', `你已属于${departmentLabel(existing.department)}，如需调换部门请联系管理员`);
         if (!existing || department && !existing.department) {
           const change = await stamp(tx, invite.clubId, 'members', club);
-          await tx.put('members', id, { ...(existing || { clubId: invite.clubId, identity, name, role: 'member', joinedAt: now() }), department, syncVersion: change.version });
+          await tx.put('members', id, { ...(existing || { clubId: invite.clubId, identity, name, role: department==='speaker'?'speaker':'member', joinedAt: now() }), department, syncVersion: change.version });
         }
         return { clubId: invite.clubId, department: department || existing?.department || '' };
       });
@@ -318,7 +335,7 @@ function createService({ store, now, randomId, hash }) {
     async createTemplate(input, identity) {
       const templateId = docKey('tpl_', input.clubId + ':' + identity, input.requestId);
       return store.transaction(async tx => {
-        const me = await member(tx, input.clubId, identity);
+        const me = await member(tx, input.clubId, identity);requireCore(me);
         const previous = await tx.get('templates', templateId);
         if (previous) return unchanged(tx, input.clubId, { template: previous });
         const fields = templateContent(input, await activeMembers(tx, { clubId: input.clubId }));
@@ -332,7 +349,7 @@ function createService({ store, now, randomId, hash }) {
       return store.transaction(async tx => {
         const template = await tx.get('templates', input.templateId);
         if (!template) fail('NOT_FOUND', '模板不存在');
-        const me = await member(tx, template.clubId, identity);
+        const me = await member(tx, template.clubId, identity);requireCore(me);
         if (template.archived) fail('ARCHIVED', '模板已归档');
         if (template.revision !== input.revision) fail('CONFLICT', '模板已被其他成员更新，请返回模板库后重新编辑');
         const fields = templateContent(input, await activeMembers(tx, { clubId: template.clubId }),template);
@@ -346,7 +363,7 @@ function createService({ store, now, randomId, hash }) {
       return store.transaction(async tx => {
         const template = await tx.get('templates', input.templateId);
         if (!template) fail('NOT_FOUND', '模板不存在');
-        const me = await member(tx, template.clubId, identity);
+        const me = await member(tx, template.clubId, identity);requireCore(me);
         if (template.creatorId !== me._id && me.role !== 'owner') fail('FORBIDDEN', '仅模板创建者或社团创建者可以归档模板');
         if (template.archived) return unchanged(tx, template.clubId, { template });
         if (template.revision !== input.revision) fail('CONFLICT', '模板已更新，请刷新后重试');
@@ -359,7 +376,7 @@ function createService({ store, now, randomId, hash }) {
     async createTaskGroup(input, identity) {
       const taskId = docKey('tg_', input.clubId + ':' + identity, input.requestId);
       return store.transaction(async tx => {
-        const me = await member(tx, input.clubId, identity);
+        const me = await member(tx, input.clubId, identity);requireCore(me);
         const previous = await tx.get('tasks', taskId);
         if (previous) {
           const children = (await tx.find('tasks', { clubId: input.clubId })).filter(t => t.parentTaskId === taskId);
@@ -368,7 +385,7 @@ function createService({ store, now, randomId, hash }) {
         if (input.parentTaskId) fail('VALIDATION', '模板只能用于创建主任务');
         if (!Array.isArray(input.subtasks) || !input.subtasks.length || input.subtasks.length > MAX_STEPS) fail('VALIDATION', `请保留1—${MAX_STEPS}项子任务`);
         const roster = await activeMembers(tx, { clubId: input.clubId });
-        const roles=templateRoles(input.roles).map((role,index)=>({ ...role, ...assignment({...input.roles[index],mode:'individual'},roster,{optional:true}) , participantDepartment:input.roles[index].participantDepartment || '' }));
+        const roles=templateRoles(input.roles).map((role,index)=>({ ...role, ...assignment({...input.roles[index],mode:'individual'},roster,{optional:true,coreOnly:role.coreMember!==false,speakersOnly:role.coreMember===false}),guestNames:input.roles[index].guestNames || '', participantDepartment:input.roles[index].participantDepartment || '' }));
         const fields = { ...content(input), ...assignment(input, roster), ...schedule(input) };
         const {dueAt}=fields;
         let sourceTemplate, template;
@@ -376,6 +393,7 @@ function createService({ store, now, randomId, hash }) {
           template = await tx.get('templates', input.templateId);
           if (!template || template.clubId !== input.clubId) fail('NOT_FOUND', '模板不属于当前社团');
           if (template.archived) fail('ARCHIVED', '模板已归档，请选择其他模板');
+          if(template.roles?.some(role=>role.coreMember===false&&input.roles?.some(next=>next.id===role.id&&next.coreMember===undefined)))fail('CONFLICT','此模板包含非核心成员角色，请刷新后重新套用');
           sourceTemplate = { id: template._id, name: template.name };
         }
         const steps=dependencySteps(input.subtasks,template);
@@ -405,11 +423,11 @@ function createService({ store, now, randomId, hash }) {
       const fields = content(input);
       const taskId = docKey('t_', input.clubId + ':' + identity, input.requestId);
       return store.transaction(async tx => {
-        const me = await member(tx, input.clubId, identity);
+        const me = await member(tx, input.clubId, identity);requireCore(me);
         const previous = await tx.get('tasks', taskId);
         if (previous) return unchanged(tx, input.clubId, { taskId, task: previous });
         const roster = await activeMembers(tx, { clubId: input.clubId });
-        const { participantIds } = assignment(input, roster);
+        const assigned = assignment(input, roster);
         let parent = null;
         if (input.parentTaskId != null && input.parentTaskId !== '') {
           parent = await tx.get('tasks', input.parentTaskId);
@@ -422,7 +440,7 @@ function createService({ store, now, randomId, hash }) {
         const task = Object.assign(fields, {
           ...(parent ? { parentTaskId: parent._id, parentCreatorId: parent.creatorId } : {}),
           _id: taskId, syncVersion: change.version,
-          clubId: input.clubId, creatorId: me._id, participantIds, mode: input.mode,
+          clubId: input.clubId, creatorId: me._id, ...assigned,
           ...schedule(input,null,!!parent), createdAt: now(), updatedAt: now(), revision: 1, archived: false,
           completions: {}, sharedCompletion: null
         });
@@ -438,19 +456,21 @@ function createService({ store, now, randomId, hash }) {
         if (task.archived) fail('ARCHIVED', '任务已归档');
         if (task.revision !== input.revision) fail('CONFLICT', '任务已被更新，请返回任务详情后重新编辑');
         const timing=schedule(input,task,!!task.parentTaskId);
-        let participantIds = task.participantIds;
-        if (task.parentTaskId && (input.participantIds !== undefined || input.participantDepartment)) {
+        let participantIds = task.participantIds,guestParticipants=task.guestParticipants||[];
+        if (task.parentTaskId && (input.participantIds !== undefined || input.participantDepartment || input.guestNames!==undefined)) {
           const roster = await activeMembers(tx, { clubId: task.clubId });
-          const { participantIds: requested } = assignment({ ...input, mode: task.mode }, roster);
-          const changed = requested.length !== participantIds.length || requested.some(id => !participantIds.includes(id));
+          const assigned=assignment({ ...input,guestNames:input.guestNames??guestParticipants.map(person=>person.name).join('\n'), mode: task.mode }, roster);
+          const requested=assigned.participantIds,requestedGuests=assigned.guestParticipants||[];
+          const changed = requested.length !== participantIds.length || requested.some(id => !participantIds.includes(id)) || JSON.stringify(requestedGuests)!==JSON.stringify(guestParticipants);
           if (changed) {
             if (Object.keys(task.completions).length || task.sharedCompletion) fail('CONFLICT', '子任务已有完成记录，请先撤销完成后再调整负责人');
             participantIds = requested;
+            guestParticipants=requestedGuests;
           }
         }
         if (task.title === fields.title && task.description === fields.description && task.priority === fields.priority && Object.entries(timing).every(([key,value])=>(task[key] ?? (key==='deadlineFollowsStart'?false:null))===value) && participantIds === task.participantIds) return unchanged(tx, task.clubId, { taskId: task._id, task });
         const change = await stamp(tx, task.clubId, 'tasks');
-        const updated = Object.assign({}, task, fields, timing, { participantIds, updatedAt: now(), revision: task.revision + 1, syncVersion: change.version });
+        const updated = Object.assign({}, task, fields, timing, { participantIds,...(task.guestParticipants||guestParticipants.length?{guestParticipants}:{}), updatedAt: now(), revision: task.revision + 1, syncVersion: change.version });
         await tx.put('tasks', task._id, updated);
         return Object.assign(change, { taskId: task._id, task: updated });
       });
@@ -460,20 +480,34 @@ function createService({ store, now, randomId, hash }) {
       return store.transaction(async tx => {
         const { task, me } = await taskAccess(tx, input.taskId, identity);
         if (task.archived) fail('ARCHIVED', '任务已归档');
-        const before = JSON.stringify([task.completions, task.sharedCompletion]);
+        const before = JSON.stringify([task.completions, task.sharedCompletion,task.completionActors]);
+        const target=input.participantId===undefined?me._id:input.participantId,proxy=target!==me._id;
+        if(typeof target!=='string')fail('VALIDATION','请选择有效的负责人');
+        if(proxy){
+          requireCore(me);
+          if(!canProxyFor(task,target,await activeMembers(tx,{clubId:task.clubId})))fail('FORBIDDEN','只能代主讲人或免注册负责人标记完成');
+        }
+        const assigned=participantKeys(task).includes(target);
         if (task.mode === 'individual') {
-          if (!task.participantIds.includes(me._id)) fail('FORBIDDEN', '你不是这项任务的参与人');
-          if (input.done && !task.completions[me._id]) task.completions[me._id] = now();
-          if (!input.done) delete task.completions[me._id];
+          if (!assigned) fail('FORBIDDEN', '你不是这项任务的参与人');
+          if (input.done && !task.completions[target]) {
+            task.completions[target] = now();
+            if(proxy){task.completionActors||={};task.completionActors[target]={actorId:me._id,actorName:me.name,at:task.completions[target]};}
+          }
+          if (!input.done) {
+            if(proxy&&task.completions[target]&&task.completionActors?.[target]?.actorId!==me._id&&!canManage(task,me))fail('FORBIDDEN','仅实际操作者、发布者或社团创建者可以撤销代完成');
+            delete task.completions[target];if(task.completionActors)delete task.completionActors[target];
+          }
         } else if (input.done) {
-          if (!task.participantIds.includes(me._id)) fail('FORBIDDEN', '只有指定成员可以完成这项任务');
-          if (!task.sharedCompletion) task.sharedCompletion = { memberId: me._id, at: now() };
+          if (!assigned) fail('FORBIDDEN', '只有指定成员可以完成这项任务');
+          if (!task.sharedCompletion) task.sharedCompletion = { memberId: target, at: now(),...(proxy?{actorId:me._id,actorName:me.name}:{}) };
         } else {
-          if (task.sharedCompletion && task.sharedCompletion.memberId !== me._id && !canManage(task, me)) fail('FORBIDDEN', '仅完成人、发布者或社团创建者可以重新打开任务');
-          if (!task.sharedCompletion && !task.participantIds.includes(me._id) && !canManage(task, me)) fail('FORBIDDEN', '无权修改此任务');
+          if(proxy&&task.sharedCompletion&&task.sharedCompletion.memberId!==target)fail('CONFLICT','此任务由另一位负责人完成，请刷新查看');
+          if (task.sharedCompletion && task.sharedCompletion.memberId !== me._id && (task.sharedCompletion.actorId||task.sharedCompletion.memberId)!==me._id && !canManage(task, me)) fail('FORBIDDEN', '仅完成人、实际操作者、发布者或社团创建者可以重新打开任务');
+          if (!task.sharedCompletion && !assigned && !canManage(task, me)) fail('FORBIDDEN', '无权修改此任务');
           task.sharedCompletion = null;
         }
-        if (before === JSON.stringify([task.completions, task.sharedCompletion])) return unchanged(tx, task.clubId, { taskId: task._id, task });
+        if (before === JSON.stringify([task.completions, task.sharedCompletion,task.completionActors])) return unchanged(tx, task.clubId, { taskId: task._id, task });
         const change = await stamp(tx, task.clubId, 'tasks');
         task.updatedAt = now(); task.revision += 1; task.syncVersion = change.version;
         await tx.put('tasks', task._id, task);

@@ -6,7 +6,7 @@
     "build": "node scripts/build.mjs",
     "experience:add": "node scripts/experience-add.mjs",
     "test": "node --test tests/*.test.js",
-    "test:worker": "node --test tests/worker.test.mjs tests/account-delete.test.mjs tests/account-settings.test.mjs tests/archive.test.mjs tests/booking.test.mjs tests/experience.test.mjs",
+    "test:worker": "node --test tests/worker.test.mjs tests/account-delete.test.mjs tests/account-settings.test.mjs tests/archive.test.mjs tests/booking.test.mjs tests/experience.test.mjs tests/speakers.test.mjs",
     "preview": "node scripts/preview.mjs",
     "worker:dev": "wrangler dev --ip 127.0.0.1 --port 8787",
     "worker:deploy": "wrangler deploy",

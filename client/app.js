@@ -5,8 +5,9 @@ import { shiftMonth } from '../shared/calendar';
 import { templateDraft, draftDeadline, draftSchedule, MAX_STEPS, MAX_ROLES } from '../shared/templates';
 import { draftPlanningFields } from '../shared/backward-schedule';
 import { normalizeStepDependencies, canDependOn, removeStep } from '../shared/step-dependencies';
-import { isAdmin } from '../shared/permissions';
+import { isAdmin,isSpeaker } from '../shared/permissions';
 import { departmentLabel, invitationToken } from '../shared/departments';
+import {resolveGuestNames} from '../shared/guest-assignments';
 import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain, setRole, removeRole } from '../shared/assignments';
 import { scheduleDraft, enableDuration, followStart, followDuration, applyTemplateDuration, changeScheduleField, scheduleFields } from '../shared/schedule-draft';
 import { templateDurationForm, templateDurationValue } from '../shared/template-duration';
@@ -137,6 +138,10 @@ async function loadAdmin() {
 }
 function receive(state) {
   s.sync = state;
+  if(isSpeaker(state.board?.me?.role)){
+    s.booking=undefined;workspaceUi.calendarOpen=false;
+    if(['edit','template-edit','templates','members'].includes(s.page)||adminPage()){s.editBoard=null;go('/mine');return;}
+  }
   if(state.board?.club && workspaceUi.clubId!==state.board.club.id){workspaceUi.clubId=state.board.club.id;workspaceUi.planner.scope=undefined;s.booking=undefined;s.bookingCheckedAt=0;}
   const accessKey=state.board?.me?[state.board.club?.id,state.board.me.id,state.board.me.role,state.board.me.department].join(':'):'';
   if(workspaceUi.accessKey!==accessKey){workspaceUi.accessKey=accessKey;workspaceUi.planner.scope=undefined;if(adminPage())clearAdmin();}
@@ -163,7 +168,7 @@ function receive(state) {
   render();
 }
 async function loadBooking() {
-  if(s.bookingLoading || !s.sync.board?.club || document.hidden)return;
+  if(isSpeaker(s.sync.board?.me?.role)||s.bookingLoading || !s.sync.board?.club || document.hidden)return;
   const ticket=generation,clubId=s.sync.board.club.id;
   s.bookingLoading=true;s.bookingCheckedAt=Date.now();
   try {
@@ -220,6 +225,7 @@ async function route() {
     const b = await api.bootstrap({ includeClubs: page === 'entry' });
     if (ticket !== generation) return;
     if (page === 'entry') { s.clubs = b.clubs || []; s.form.nickname = b.me?.name || ''; }
+    if(isSpeaker(b.me?.role)&&['edit','template-edit'].includes(page)){go('/mine');return;}
     if (page === 'edit') {
       if (!b.club) { go('/entry'); return; }
       const task = s.id ? b.tasks.find(t => t._id === s.id) : null;
@@ -233,7 +239,7 @@ async function route() {
       s.canReassign = !!task?.parentTaskId && !Object.keys(task.completions).length && !task.sharedCompletion;
       const p = parts(task?.dueAt || (parent?.dueAt > Date.now() ? parent.dueAt : Date.now()+86400000));
       s.editBoard = b; s.revision = task?.revision;
-      s.form = { title: task?.title || '', description: task?.description || '', date: p.date, time: task || parent ? p.time : '20:00', mode: task?.mode || 'individual', priority: task?.priority || 'normal', participantIds: task?.participantIds.slice() || (parent ? [] : b.members.map(m=>m.id)) };
+      s.form = { title: task?.title || '', description: task?.description || '', date: p.date, time: task || parent ? p.time : '20:00', mode: task?.mode || 'individual', priority: task?.priority || 'normal', guestNames:task?.guestParticipants?.map(person=>person.name).join('\n')||'',allowGuestNames:!!task?.guestParticipants?.length,participantIds: task?.participantIds.slice() || (parent ? [] : b.members.filter(m=>!isSpeaker(m.role)).map(m=>m.id)) };
       Object.assign(s.form,scheduleDraft(task));
       if (!task && !parent && s.selectedTemplate) applyTemplate();
       if(!task&&!parent&&!s.selectedTemplate&&!s.guidePractice)Object.assign(s,guideDrafts.takeTask(guideKey())||{});
@@ -264,11 +270,11 @@ function applyTemplate() {
   if (!template) throw new Error('请先选择一个模板');
   const draft=templateDraft(template,s.editBoard.members);
   const { steps, ...main }=draft;
-  s.form={...s.form,...main,participantIds:main.participantDepartment || main.participantIds.length?main.participantIds:s.editBoard.members.map(m=>m.id)};
+  s.form={...s.form,...main,participantIds:main.participantDepartment || main.participantIds.length?main.participantIds:s.editBoard.members.filter(m=>!isSpeaker(m.role)).map(m=>m.id)};
   applyTemplateDuration(s.form,main.durationMinutes);
   s.steps=steps; s.openSteps=new Set(); s.appliedTemplate={id:template._id,name:template.name};
 }
-const taskFields = f => ({ title:f.title,description:f.description,mode:f.mode,priority:f.priority,participantIds:f.participantIds,participantDepartment:f.participantDepartment || '' });
+const taskFields = f => ({ title:f.title,description:f.description,mode:f.mode,priority:f.priority,participantIds:f.participantIds,participantDepartment:f.participantDepartment || '',guestNames:f.guestNames||'' });
 function focusInvalidField(event) {
   const details=event.target.closest('details');
   if (details) { details.open=true; s.openSteps.add(Number(details.dataset.stepPanel)); }
@@ -411,7 +417,9 @@ function inputChanged(event) {
   const {step,field,role}=event.target.dataset;
   if (role!==undefined) {
     if (!s.form.roles?.[Number(role)]) return;
-    s.form.roles[Number(role)].name=value;
+    const key=event.target.dataset.roleField||'name',item=s.form.roles[Number(role)];
+    if(key==='coreMember'){item.coreMember=value==='true';item.participantIds=[];item.participantDepartment='';item.guestNames='';}
+    else if(['name','guestNames'].includes(key))item[key]=value;
     if (event.type==='change') render();
   } else if (step!==undefined) {
     if (!s.steps[Number(step)]) return;
@@ -422,6 +430,8 @@ function inputChanged(event) {
   } else if (name==='selectedTemplate') s.selectedTemplate=value;
   else if (name==='inviteDepartment') { s.inviteDepartment=value; render(); }
   else if (name==='templateCategory') { s.category=value; render(); }
+  else if(name==='memberDepartment'){s.form.memberDepartment=value;if(value==='speaker')s.form.memberRole='speaker';else if(s.form.memberRole==='speaker')s.form.memberRole='member';render();}
+  else if(name==='memberRole'){s.form.memberRole=value;if(value==='speaker')s.form.memberDepartment='speaker';else if(s.form.memberDepartment==='speaker')s.form.memberDepartment='';render();}
   else if (name === 'search') { if(['edit','template-edit','calendar'].includes(s.page))s.contextSearch=value;else s.search = value; api.sync.touch(); render(); }
   else { changeScheduleField(s.form,name,value); if(event.type==='change'&&['date','time','startDate','startTime','endDate','endTime'].includes(name)) render(); }
 }
@@ -429,6 +439,7 @@ root.addEventListener('input', inputChanged);
 root.addEventListener('change', inputChanged);
 root.addEventListener('submit', event => {
   event.preventDefault(); const kind = event.target.dataset.form;
+  if(isSpeaker(s.sync.board?.me?.role)&&['task','template'].includes(kind)){toast('主讲人只能查看并完成分配给自己的任务');return;}
   if(s.guidePractice&&['task','template'].includes(kind)){toast('这是本地练习，请返回模板库后正式创建');return;}
   if(kind?.startsWith('experience')){submitExperience(kind,event);return;}
   const data = { ...s.form, ...Object.fromEntries(new FormData(event.target)) };
@@ -472,17 +483,17 @@ root.addEventListener('submit', event => {
       const group=!s.id&&!s.parent&&s.steps.length>0;
       const plan=group?draftSchedule(data,s.steps):[];
       const subtasks=group?s.steps.map((step,index)=>{
-        if (!resolveParticipants(step,s.editBoard.members,data).length) { s.openSteps.add(index); throw new Error(step.roleId?`请为角色「${data.roles.find(role=>role.id===step.roleId)?.name || '未命名'}」选择负责人`:`请为子任务${index+1}「${step.title}」选择负责人`); }
+        if (!resolveParticipants(step,s.editBoard.members,data).length&&!resolveGuestNames(step,data).length) { s.openSteps.add(index); throw new Error(step.roleId?`请为角色「${data.roles.find(role=>role.id===step.roleId)?.name || '未命名'}」选择负责人`:`请为子任务${index+1}「${step.title}」选择负责人`); }
         const dueAt=plan[index].dueAt;
         if(dueAt<=Date.now()) { s.openSteps.add(index); throw new Error(`子任务${index+1}「${step.title}」的截止时间已过，请调整日期或提前天数`); }
         if(data.schedulingMode==='backward'&&plan[index].startAt<Date.now()) {s.openSteps.add(index);throw new Error(`「${step.title}」按预计耗时需在过去开始，请调迟主任务或调整计划`);}
         return {...taskFields(step),...draftPlanningFields(step,data.schedulingMode==='backward'),id:step.id,dependsOn:step.dependsOn || [],roleId:step.roleId || '',followMain:step.followMain === true,daysBefore:step.daysBefore,...(step.customDeadline?{dueAt:parseDeadline(step.date,step.time)}:{})};
       }):undefined;
-      const result = await api.call(s.id?'editTask':group?'createTaskGroup':'createTask', { ...taskFields(data), ...scheduleFields(data), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId, ...(group?{subtasks,schedulingMode:data.schedulingMode || 'independent',roles:(data.roles || []).map(role=>({id:role.id,name:role.name,participantIds:role.participantIds,participantDepartment:role.participantDepartment || ''})),templateId:s.appliedTemplate?.id}:{}) });
+      const result = await api.call(s.id?'editTask':group?'createTaskGroup':'createTask', { ...taskFields(data), ...scheduleFields(data), clubId: s.editBoard.club.id, parentTaskId: s.parent?._id, taskId: s.id, revision: s.revision, requestId: s.requestId, ...(group?{subtasks,schedulingMode:data.schedulingMode || 'independent',roles:(data.roles || []).map(role=>({id:role.id,name:role.name,coreMember:role.coreMember!==false,guestNames:role.guestNames||'',participantIds:role.participantIds,participantDepartment:role.participantDepartment || ''})),templateId:s.appliedTemplate?.id}:{}) });
       go('/task?id='+encodeURIComponent(result.taskId));
     }
     if (kind === 'template') {
-      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),schedulingMode:data.schedulingMode || 'independent',durationMinutes:templateDurationValue(data),name:data.name,category:data.category,roles:(data.roles || []).map(role=>({id:role.id,name:role.name})),steps:s.steps.map(step=>({...taskFields(step),...draftPlanningFields(step,data.schedulingMode==='backward'),id:step.id,dependsOn:step.dependsOn || [],roleId:step.roleId || '',followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
+      await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),schedulingMode:data.schedulingMode || 'independent',durationMinutes:templateDurationValue(data),name:data.name,category:data.category,roles:(data.roles || []).map(role=>({id:role.id,name:role.name,coreMember:role.coreMember!==false})),steps:s.steps.map(step=>({...taskFields(step),...draftPlanningFields(step,data.schedulingMode==='backward'),id:step.id,dependsOn:step.dependsOn || [],roleId:step.roleId || '',followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
       go('/templates'); toast('共享模板已保存');
     }
     if (kind === 'name') { await api.call('renameMe', { clubId: s.sync.board.club.id, name: data.nickname }); s.form.nickname = undefined; toast('称呼已更新'); }
@@ -513,15 +524,16 @@ root.addEventListener('click', event => {
   }
   if (action==='addRole') {
     s.form.roles ||= [];
-    if (s.form.roles.length<MAX_ROLES) s.form.roles.push({id:api.requestId(),name:'',participantIds:[],participantDepartment:''});
+    if (s.form.roles.length<MAX_ROLES) s.form.roles.push({id:api.requestId(),name:'',coreMember:true,guestNames:'',participantIds:[],participantDepartment:''});
     render(); root.querySelector(`[name="role-${s.form.roles.length-1}-name"]`)?.focus(); return;
   }
   if (action==='removeRole') { removeRole(s.form,s.steps,id,s.editBoard.members); render(); return; }
   if (action==='roleParticipant' || action==='roleDepartment') {
     const role=s.form.roles?.[Number(el.dataset.index)];
     if (!role) return;
-    if (action==='roleParticipant') toggleParticipant(role,id,s.editBoard.members);
-    else chooseDepartment(role,value,s.editBoard.members);
+    const roster=s.editBoard.members.filter(member=>role.coreMember===false?isSpeaker(member.role):!isSpeaker(member.role));
+    if (action==='roleParticipant') toggleParticipant(role,id,roster);
+    else chooseDepartment(role,value,roster);
     render(); return;
   }
   if (['addStep','removeStep','stepUp','stepDown','stepDependency','stepAnchor','stepParticipant','stepDepartment','stepFollow','stepCustom','stepRelative','assignStepsToMe'].includes(action)) {
@@ -546,7 +558,7 @@ root.addEventListener('click', event => {
       if(value==='role' && s.form.roles?.length) setRole(step,step.roleId || s.form.roles[0].id,s.form,s.editBoard.members);
       else setFollowMain(step,value==='main',s.form,s.editBoard.members);
     }
-    if(action==='assignStepsToMe') for(const item of s.steps) { item.participantIds=[s.editBoard.me.id]; item.participantDepartment=''; item.followMain=false; item.roleId=''; }
+    if(action==='assignStepsToMe') for(const item of s.steps) { item.participantIds=[s.editBoard.me.id]; item.participantDepartment=''; item.followMain=false; item.roleId=''; item.guestNames=''; }
     if(action==='stepRelative') step.customDeadline=false;
     if(action==='stepCustom') {
       try { const p=parts(draftDeadline(s.form,step,s.steps)); Object.assign(step,{date:p.date,time:p.time,customDeadline:true}); }
@@ -580,7 +592,7 @@ root.addEventListener('click', event => {
   if (action === 'mode' || action === 'priority') { s.form[action] = value; render(); return; }
   if (action === 'department') { chooseDepartment(s.form,value,s.editBoard.members); render(); return; }
   if (action === 'participant') { toggleParticipant(s.form,id,s.editBoard.members); render(); return; }
-  if (action === 'allMembers') { s.form.participantIds = resolveParticipants(s.form,s.editBoard.members).length===s.editBoard.members.length ? [] : s.editBoard.members.map(m=>m.id); s.form.participantDepartment=''; render(); return; }
+  if (action === 'allMembers') { const ids=resolveParticipants(s.form,s.editBoard.members),core=s.editBoard.members.filter(m=>!isSpeaker(m.role));s.form.participantIds = core.length===ids.length&&core.every(m=>ids.includes(m.id)) ? [] : core.map(m=>m.id);s.form.participantDepartment=''; render(); return; }
   if (action === 'chooseClub') { api.setClub(id); go('/board'); return; }
   if (action === 'continue') { s.recovery = ''; go('/board'); return; }
   if (action === 'copyRecovery') { copy(s.recovery); return; }
@@ -631,6 +643,11 @@ root.addEventListener('click', event => {
       const url=new URL(location.href); url.hash='/reset?token='+result.resetToken+'&username='+encodeURIComponent(result.username);
       s.resetLink=url.href; s.resetUsername=result.username; s.resetExpiresAt=result.expiresAt;
       toast('重设链接已生成');
+    }
+    if(action==='proxyComplete'){
+      const task=s.sync.board.tasks.find(t=>t._id===id),person=task&&taskView(task,s.sync.board).participants.find(p=>p.id===el.dataset.participant);
+      if(!person?.canProxyToggle)throw new Error('当前不能代这位负责人修改完成状态，请刷新重试');
+      await api.call('complete',{taskId:id,participantId:person.id,done:!person.done});toast(person.done?'已撤销代完成':'已记录代完成及操作者');
     }
     if (action === 'toggle') {
       const b = s.sync.board, raw = b.tasks.find(t=>t._id===id); if (!raw) throw new Error('任务已归档');

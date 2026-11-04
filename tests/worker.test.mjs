@@ -14,7 +14,13 @@ async function post(route, data, token, origin = 'https://site.test') {
   return { status:response.status, ...(await response.json()), headers:response.headers };
 }
 async function api(action, input, token=owner.token) { const r=await post('/api',{action,input},token); assert.equal(r.status,200,JSON.stringify(r)); return r.data; }
-async function register(username, mode, extra={}) { return post('/auth/register',{ username,password,nickname:username,mode,name:'SPS 测试社团',invite,...extra }); }
+async function register(username, mode, extra={},ip='') {
+  const data={username,password,nickname:username,mode,name:'SPS 测试社团',invite,...extra};
+  if(!ip)return post('/auth/register',data);
+  const time=String(Date.now()),signature=createHmac('sha256','test-gateway-secret').update(`${time}\n${ip}`).digest('hex');
+  const response=await mf.dispatchFetch('http://localhost/auth/register',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://site.test','X-SPS-Gateway-IP':ip,'X-SPS-Gateway-Time':time,'X-SPS-Gateway-Signature':signature},body:JSON.stringify(data)});
+  return {status:response.status,...await response.json()};
+}
 before(async()=>{
   const result=await build({entryPoints:['server/worker.mjs'],bundle:true,format:'esm',platform:'neutral',external:['cloudflare:workers','node:*'],write:false});
   directory=await mkdtemp(path.join(tmpdir(),'sps-worker-'));
@@ -194,7 +200,7 @@ test('only the creator appoints admins; delegated admins cannot alter creator or
   const adminList=await api('adminMembers',{clubId:f.clubId},f.member.token);
   assert.equal(adminList.me.role,'admin');
   const invitations=await api('getInvite',{clubId:f.clubId},f.member.token);
-  assert.equal(invitations.token,f.invite); assert.equal(invitations.departments.length,3);
+  assert.equal(invitations.token,f.invite); assert.equal(invitations.departments.length,4);
   const creator=adminList.members.find(m=>m.role==='owner');
   assert.equal(creator.canEdit,false);
   for(const input of [
@@ -273,10 +279,10 @@ test('department registration, joining, admin edits, authorization, rotation and
   const invites=await api('getInvite',{clubId:f.clubId},f.creator.token);
   const accounts=[];
   for(const d of invites.departments) {
-    const registered=await register('dept_'+d.id,'join',{invite:d.token,department:'forged',role:'admin'});
+    const registered=await register('dept_'+d.id,'join',{invite:d.token,department:'forged',role:'admin'},'192.0.2.79');
     assert.equal(registered.status,200,JSON.stringify(registered)); accounts.push(registered.data);
     const board=await api('bootstrap',{clubId:f.clubId},registered.data.token);
-    assert.equal(board.me.department,d.id); assert.equal(board.me.role,'member');
+    assert.equal(board.me.department,d.id); assert.equal(board.me.role,d.id==='speaker'?'speaker':'member');
     assert.ok(!JSON.stringify(board).includes(d.token));
   }
   const before=await api('bootstrap',{clubId:f.clubId},f.member.token);

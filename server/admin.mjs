@@ -65,7 +65,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     if (action === 'adminMembers') {
       const members = await activeMembers(db, { clubId: input.clubId });
       const events = canViewAudit(actor.role) ? sql.exec('SELECT actor_member_id,target_member_id,action,fields,created_at FROM admin_audit WHERE club_id=? ORDER BY id DESC LIMIT 30', input.clubId).toArray() : [];
-      const visible=actor.role==='department_admin'?members.filter(m=>m._id===actor._id || m.department===actor.department && !!actor.department):members;
+      const visible=actor.role==='department_admin'?members.filter(m=>m._id===actor._id || m.role==='speaker' || m.department===actor.department && !!actor.department):members;
       return { me: safeMember(actor), canViewAudit:canViewAudit(actor.role), members: await Promise.all(visible.sort((a,b) => a.joinedAt-b.joinedAt).map(m => entry(db, actor, m))),
         events: events.map(r => ({ actorId:r.actor_member_id, targetId:r.target_member_id, action:r.action, fields:JSON.parse(r.fields), at:r.created_at })) };
     }
@@ -109,6 +109,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     const department = input.department === undefined ? target.department || '' : input.department;
     if (!validDepartment(department)) fail('VALIDATION', '请选择有效的部门');
     if (!ROLES.includes(role)) fail('VALIDATION', '请选择有效的成员角色');
+    if((role==='speaker')!==(department==='speaker'))fail('VALIDATION','主讲人类别须对应主讲人权限；调整成员类型时请同时调整所属类别');
     if ((target.role === 'owner' && role !== 'owner') || (target.role !== 'owner' && role === 'owner')) fail('FORBIDDEN', '创建者身份不能在此修改');
     if (role !== target.role && !canAssignRole(safeMember(actor),safeMember(target),role)) fail('FORBIDDEN', '只能任免权限低于自己的管理员');
     if (role==='department_admin' && !department) fail('VALIDATION', '请为部门管理指定所属部门');
@@ -134,6 +135,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     // Demotion cancels every outstanding reset issued with these privileges.
     if (role !== target.role || department !== (target.department || '')) sql.exec('DELETE FROM account_resets WHERE club_id=? AND (actor_identity=? OR account_id=?)', input.clubId, target.identity, target.identity);
     const version = baseVersion + 1, updated = { ...target, name, role, department, syncVersion:version };
+    if((target.role==='speaker')!==(role==='speaker'))updated.taskVisibilityVersion=version;
     const updatedClub = { ...club, syncVersion:version, membersVersion:version };
     await db.put('members', target._id, updated); await db.put('clubs', club._id, updatedClub);
     audit(input.clubId, actor, target, 'edit', fields);

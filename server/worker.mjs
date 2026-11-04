@@ -158,6 +158,7 @@ export class ClubService extends DurableObject {
     if (data.action==='bookingStatus') {
       const member=await this.store.get('members','m_'+hash(data.input?.clubId+':'+account.id).slice(0,32));
       if (!member || member.archived) fail('FORBIDDEN','请先加入这个社团');
+      if(member.role==='speaker')fail('FORBIDDEN','主讲人只能查看自己的任务日程');
       return {enabled:this.booking.configured() && data.input.clubId===this.env.BOOKING_CLUB_ID,
         ...(data.input.clubId===this.env.BOOKING_CLUB_ID?{sync:this.booking.status()}:{})};
     }

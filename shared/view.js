@@ -1,3 +1,5 @@
+const {isSpeaker,isCoreMember}=require('./permissions');
+const {participantKeys,canProxyFor}=require('./guest-assignments');
 const pad = value => String(value).padStart(2, '0');
 function parts(time) {
   const d = new Date(time + 8 * 3600000);
@@ -24,21 +26,27 @@ function durationLabel(task) {
 }
 function taskView(task, board, now = Date.now()) {
   const { me, members } = board;
-  const participants = task.participantIds.map(id => {
-    const member = members.find(m => m.id === id) || { id, name: '已离开的成员' };
+  const canManage = !isSpeaker(me.role)&&(me.role === 'owner' || me.id === task.creatorId || me.id === task.parentCreatorId);
+  const participants = participantKeys(task).map(id => {
+    const guest=task.guestParticipants?.find(person=>person.id===id);
+    const member = guest?{...guest,guest:true,role:'speaker'}:members.find(m => m.id === id) || { id, name: '已离开的成员' };
     const completedAt = task.mode === 'individual' ? task.completions[id] : task.sharedCompletion && task.sharedCompletion.memberId === id ? task.sharedCompletion.at : null;
-    return Object.assign({}, member, { initial: member.name.slice(0, 1), done: !!completedAt, completionLabel: completedAt ? dueLabel(completedAt, now) : '待完成' });
+    const record=task.mode==='individual'?task.completionActors?.[id]:task.sharedCompletion?.memberId===id?task.sharedCompletion:null;
+    const actorName=record?.actorId?(record.actorName||members.find(m=>m.id===record.actorId)?.name||'已离开的成员'):'';
+    const proxyAllowed=isCoreMember(me.role)&&id!==me.id&&canProxyFor(task,id,members);
+    const canProxyToggle=proxyAllowed&&(completedAt?(record?.actorId===me.id||canManage):task.mode==='individual'||!task.sharedCompletion);
+    return Object.assign({}, member, { initial: member.name.slice(0, 1), done: !!completedAt, completionLabel: completedAt ? dueLabel(completedAt, now) : '待完成',completionActor:actorName,proxyAllowed,canProxyToggle });
   });
   const count = task.mode === 'individual' ? participants.filter(p => p.done).length : task.sharedCompletion ? 1 : 0;
   const total = task.mode === 'individual' ? participants.length : 1;
   const done = count === total;
   const assigned = task.participantIds.includes(me.id);
   const myDone = task.mode === 'individual' ? !!task.completions[me.id] : done;
-  const canManage = me.role === 'owner' || me.id === task.creatorId || me.id === task.parentCreatorId;
-  const canToggle = task.mode === 'individual' ? assigned : done ? canManage || task.sharedCompletion.memberId === me.id : assigned;
+  const canToggle = task.mode === 'individual' ? assigned : done ? canManage || task.sharedCompletion.memberId === me.id || task.sharedCompletion.actorId===me.id : assigned;
   const creator = members.find(m => m.id === task.creatorId);
   return Object.assign({}, task, {
     hasDuration:hasDuration(task), durationLabel:durationLabel(task),
+    parentVisible:!task.parentTaskId||(board.tasks||[]).some(t=>t._id===task.parentTaskId),
     parentTitle: task.parentTaskId ? (board.tasks || []).find(t => t._id === task.parentTaskId)?.title || '主任务' : '',
     participants, count, total, done, assigned, myDone, canToggle, canManage,
     creatorName: creator ? creator.name : '已离开的成员',
@@ -47,8 +55,8 @@ function taskView(task, board, now = Date.now()) {
     statusLabel: done ? '已完成' : task.dueAt < now ? '已逾期' : task.dueAt - now < 86400000 ? '即将截止' : '进行中',
     dueLabel: dueLabel(task.dueAt, now), fullDue: parts(task.dueAt).date + ' ' + parts(task.dueAt).time,
     percent: Math.round(count / total * 100),
-    participantLabel: participants.length === members.length && members.every(m => task.participantIds.includes(m.id)) ? '全体成员' : participants.map(p => p.name).join('、'),
-    progressLabel: task.mode === 'individual' ? `${count}/${total} 人完成` : done ? `${(members.find(m => m.id === task.sharedCompletion.memberId) || {}).name || '已离开的成员'}已完成` : `${participants.length} 位负责人`,
+    participantLabel: !task.guestParticipants?.length && participants.length === members.length && members.every(m => task.participantIds.includes(m.id)) ? '全体成员' : participants.map(p => p.name).join('、'),
+    progressLabel: task.mode === 'individual' ? `${count}/${total} 人完成` : done ? `${participants.find(m=>m.id===task.sharedCompletion.memberId)?.name||'已离开的成员'}已完成${task.sharedCompletion.actorId?'（'+(task.sharedCompletion.actorName||members.find(m=>m.id===task.sharedCompletion.actorId)?.name||'已离开的成员')+' 代完成）':''}` : `${participants.length} 位负责人`,
     actionLabel: myDone ? task.mode === 'shared' ? '重新打开任务' : '撤销我的完成' : task.mode === 'shared' ? '完成这项任务' : '标记我已完成'
   });
 }

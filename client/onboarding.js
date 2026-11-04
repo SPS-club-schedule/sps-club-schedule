@@ -212,6 +212,7 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
     state=s;account=accountId;
     if(s.experience)canWrite=!!s.experience.canWrite;
     if(active()) {
+      if(s.sync?.board?.me?.role==='speaker'){stop(false,false);return;}
       const nextKey=guideKey(account,(s.sync?.board?.club||s.editBoard?.club)?.id);
       if(kind==='department'&&!isAdmin(s.sync?.board?.me?.role)){stop(false,false);return;}
       if(key!==nextKey){stop(false,false);return;}

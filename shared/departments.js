@@ -2,7 +2,8 @@
 const DEPARTMENTS = Object.freeze([
   { id: 'publicity', name: '宣传部' },
   { id: 'liaison', name: '联络部' },
-  { id: 'academic', name: '学术部' }
+  { id: 'academic', name: '学术部' },
+  { id: 'speaker', name: '主讲人' }
 ]);
 const validDepartment = value => value === '' || DEPARTMENTS.some(d => d.id === value);
 const departmentLabel = value => DEPARTMENTS.find(d => d.id === value)?.name || '未分配';

@@ -22,7 +22,7 @@ export function tutorialPreferences(storage) {
 
 export function canOfferTutorial(s, accountId) {
   return !!accountId && ['board','mine','calendar'].includes(s.page) &&
-    s.sync?.phase==='ready' && !!s.sync.board?.club?.id && !!s.sync.board?.me?.id &&
+    s.sync?.phase==='ready' && !!s.sync.board?.club?.id && !!s.sync.board?.me?.id && s.sync.board.me.role!=='speaker' &&
     !s.busy && !s.recovery && !s.error;
 }
 

@@ -19,16 +19,18 @@ function calendarEntries(board,{scope,showDeadlines=true,activities=[]}={},now=D
   const ids=new Set(scope==='mine'?[board.me.id]:(board.members||[]).filter(m=>scope==='club'||m.department===department).map(m=>m.id));
   const entries=[];
   for(const task of board.tasks||[]) {
-    if(task.archived)continue;
+    if(task.archived||board.me.role==='speaker'&&!task.participantIds.includes(board.me.id))continue;
     const base={taskId:task._id,title:task.title,location:task.location||'未定',club:board.club?.name||'SPS',href:'#/task?id='+encodeURIComponent(task._id)};
     if(hasDuration(task))entries.push({...base,key:'activity:'+task._id,kind:'activity',startsAt:task.startsAt,endsAt:task.endsAt});
-    const pending=task.mode==='shared'?!task.sharedCompletion:task.participantIds.some(id=>ids.has(id)&&!task.completions?.[id]);
-    if(showDeadlines && pending && task.participantIds.some(id=>ids.has(id)) && Number.isSafeInteger(task.dueAt)) {
+    const guests=['club','department:speaker'].includes(scope)?task.guestParticipants||[]:[];
+    const selected=[...task.participantIds.filter(id=>ids.has(id)),...guests.map(person=>person.id)];
+    const pending=task.mode==='shared'?!task.sharedCompletion:selected.some(id=>!task.completions?.[id]);
+    if(showDeadlines && pending && selected.length && Number.isSafeInteger(task.dueAt)) {
       entries.push({...base,key:'deadline:'+task._id,kind:'deadline',startsAt:task.dueAt,endsAt:task.dueAt,
-        people:task.participantIds.filter(id=>ids.has(id)).map(id=>board.members.find(m=>m.id===id)?.name||'已离开的成员').join('、'),overdue:task.dueAt<now});
+        people:selected.map(id=>board.members.find(m=>m.id===id)?.name||guests.find(person=>person.id===id)?.name||'已离开的成员').join('、'),overdue:task.dueAt<now});
     }
   }
-  for(const activity of activities)if(isBookingActivity(activity))entries.push({...activity,key:'external:'+activity.id,kind:'external'});
+  for(const activity of activities)if(board.me.role!=='speaker'&&isBookingActivity(activity))entries.push({...activity,key:'external:'+activity.id,kind:'external'});
   return {scope,entries};
 }
 function compactTasks(board,scope,now=Date.now()) {

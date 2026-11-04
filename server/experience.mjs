@@ -23,7 +23,7 @@ export function createExperienceService(ctx,env,store) {
   async function member(account) {
     if(!account || !clubId())return null;
     const m=await store.get('members','m_'+digest(clubId()+':'+account.id).slice(0,32));
-    return m&&!m.archived?m:null;
+    return m&&!m.archived&&m.role!=='speaker'?m:null;
   }
   const manages=m=>m&&['owner','admin','web_admin'].includes(m.role);
   const editable=(m,row)=>!!m&&(row.creator===m._id||manages(m));

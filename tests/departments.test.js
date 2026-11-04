@@ -12,32 +12,32 @@ async function fixture() {
   const { clubId } = await run('createClub', { name: 'SPS', nickname: 'Owner', requestId: 'department-club' }, 'owner');
   return { store, run, clubId, board: (identity = 'owner') => run('bootstrap', { clubId }, identity) };
 }
-test('existing clubs get three stable department invitations atomically without replacing the original code', async () => {
+test('existing clubs get department and speaker invitations atomically without replacing the original code', async () => {
   const f = await fixture(), before = await f.store.get('clubs', f.clubId);
   const oldToken = (await f.store.get('invites', before.inviteHash)).token;
   await assert.rejects(f.run('getInvite', { clubId: f.clubId }, 'outsider'), { code: 'FORBIDDEN' });
   assert.equal((await f.store.get('clubs', f.clubId)).departmentInviteHashes, undefined);
   const [a,b] = await Promise.all([1,2].map(() => f.run('getInvite', { clubId: f.clubId }, 'owner')));
   assert.deepEqual(a,b); assert.equal(a.token,oldToken);
-  assert.deepEqual(a.departments.map(d=>d.name),['宣传部','联络部','学术部']);
-  assert.equal(new Set([a.token,...a.departments.map(d=>d.token)]).size,4);
+  assert.deepEqual(a.departments.map(d=>d.name),['宣传部','联络部','学术部','主讲人']);
+  assert.equal(new Set([a.token,...a.departments.map(d=>d.token)]).size,5);
   assert.equal((await f.board()).version,before.syncVersion+1);
   await f.run('joinClub',{token:oldToken,nickname:'Legacy member',department:'academic'},'legacy');
   assert.equal((await f.board('legacy')).me.department,'');
   const publicBoard=JSON.stringify(await f.board());
   for(const token of [a.token,...a.departments.map(d=>d.token)]) assert.ok(!publicBoard.includes(token));
 });
-test('the invitation determines the department for all three departments and deltas expose the assignment', async () => {
+test('the invitation determines the department for departments and speakers and deltas expose the assignment', async () => {
   const f=await fixture(), invites=await f.run('getInvite',{clubId:f.clubId},'owner');
   for(const d of invites.departments) {
     const before=await f.board();
     await f.run('joinClub',{token:d.token,nickname:d.name,department:'forged',role:'owner',clubId:'foreign'},d.id);
     const me=(await f.board(d.id)).me;
-    assert.equal(me.department,d.id); assert.equal(me.role,'member');
+    assert.equal(me.department,d.id); assert.equal(me.role,d.id==='speaker'?'speaker':'member');
     const delta=await f.run('sync',{clubId:f.clubId,since:before.version},'owner');
     assert.equal(delta.members.find(m=>m.id===me.id).department,d.id);
   }
-  assert.equal((await f.board()).members.length,4);
+  assert.equal((await f.board()).members.length,5);
 });
 test('unassigned existing members can join a department once without losing their name, role, history or membership', async () => {
   const f=await fixture(), invites=await f.run('getInvite',{clubId:f.clubId},'owner');
@@ -76,7 +76,7 @@ test('failed department initialization leaves no partial invitations and can be 
   });
   await assert.rejects(f.run('getInvite',{clubId:f.clubId},'owner'),/storage failure/);
   assert.deepEqual(f.store.snapshot(),before); f.store.transaction=transaction;
-  assert.equal((await f.run('getInvite',{clubId:f.clubId},'owner')).departments.length,3);
+  assert.equal((await f.run('getInvite',{clubId:f.clubId},'owner')).departments.length,4);
 });
 test('ordinary members cannot fetch or initialize invitations; current same-club admins can', async () => {
   const f=await fixture(), club=await f.store.get('clubs',f.clubId);
@@ -89,7 +89,7 @@ test('ordinary members cannot fetch or initialize invitations; current same-club
   const setRole=role=>f.store.transaction(async tx=>{const row=await tx.get('members',me.id); await tx.put('members',me.id,{...row,role});});
   await setRole('admin');
   const invites=await f.run('getInvite',{clubId:f.clubId},'member');
-  assert.equal(invites.token,general); assert.equal(invites.departments.length,3);
+  assert.equal(invites.token,general); assert.equal(invites.departments.length,4);
   await setRole('member');
   await assert.rejects(f.run('getInvite',{clubId:f.clubId},'member'),{code:'FORBIDDEN'});
   assert.deepEqual(await f.run('getInvite',{clubId:f.clubId},'owner'),invites);
@@ -110,14 +110,14 @@ test('ordinary member pages never render invitation codes or controls even with 
 test('member and admin pages show departments, select matching invitation codes and support department search/editing', async () => {
   const bundle=buildSync({entryPoints:['client/views.js'],bundle:true,format:'esm',write:false});
   const views=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
-  const members=[{id:'owner',name:'Old member',role:'owner'},...DEPARTMENTS.map(d=>({id:d.id,name:d.name+'成员',role:'member',department:d.id,username:d.id,canEdit:true}))];
+  const members=[{id:'owner',name:'Old member',role:'owner'},...DEPARTMENTS.map(d=>({id:d.id,name:d.name+'成员',role:d.id==='speaker'?'speaker':'member',department:d.id,username:d.id,canEdit:true}))];
   const invites={token:'general-code',departments:DEPARTMENTS.map(d=>({...d,token:d.id+'-code'}))};
   const state={sync:{phase:'ready',board:{club:{id:'club',name:'SPS'},me:members[0],members}},form:{},invites,adminData:{members,events:[]}};
   assert.ok(views.members(state).includes('未分配'));
   for(const d of DEPARTMENTS) {
     state.inviteDepartment=d.id;
     const html=views.members(state);
-    assert.ok(html.includes('自动归入'+d.name)); assert.ok(html.includes(d.id+'-code')); assert.ok(!html.includes('general-code'));
+    assert.ok(html.includes(d.id==='speaker'?'只能查看并完成自己的任务':'自动归入'+d.name)); assert.ok(html.includes(d.id+'-code')); assert.ok(!html.includes('general-code'));
     assert.equal(invitationToken(invites,d.id),d.id+'-code');
     state.search=d.name;
     const admin=views.admin(state);
