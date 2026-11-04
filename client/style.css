@@ -184,3 +184,10 @@ select:focus-visible, summary:focus-visible { outline: 3px solid #91aa7b; outlin
 .dependency-link { text-decoration: underline; text-underline-offset: 3px; }
 .dependency-picker .chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
 .dependency-picker .chip:disabled { opacity: .5; cursor: not-allowed; }
+
+.planning-selector { margin: 16px 0; }
+.planning-preview { background: #edf3e8; margin: 16px 0; }
+.planning-row { padding: 12px 0; border-bottom: 1px solid #d9e4d5; }
+.planning-row:last-of-type { border-bottom: 0; }
+.planning-row strong { display: block; margin-bottom: 5px; }
+.planning-row .small { line-height: 1.8; }

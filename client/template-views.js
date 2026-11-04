@@ -1,12 +1,12 @@
 import { e, button, link, error, busy, field, syncRow, nav } from './ui';
-import { parts } from '../shared/view';
-import { draftDeadline, MAX_STEPS, MAX_ROLES } from '../shared/templates';
+import { MAX_STEPS, MAX_ROLES } from '../shared/templates';
 import { resolveParticipants } from '../shared/assignments';
 import { departmentLabel } from '../shared/departments';
 import { assigneePicker } from './assignee-picker';
 import { templateDurationEditor } from './schedule-editor';
 import { durationText } from '../shared/template-duration';
 import { stepDependencies, dependencyPicker } from './dependency-views';
+import { templateStepTiming, stepPlan, schedulingSelector, planningPreview, stepDeadlineEditor, planMoment } from './planning-views';
 
 const options = (values, selected) => values.map(([value, label]) => `<option value="${e(value)}" ${value===selected?'selected':''}>${e(label)}</option>`).join('');
 const categories = b => [...new Set((b.templates || []).map(t => t.category))].sort((a,b)=>a.localeCompare(b,'zh'));
@@ -19,7 +19,7 @@ export function templates(s) {
   if (!b?.club) return `<section class="page">${syncRow(s)}${error(s)}</section>${nav('templates',b)}`;
   const shown = (b.templates || []).filter(t => (!s.category || t.category===s.category) && fields(t).toLowerCase().includes(s.search.trim().toLowerCase())).sort((a,b)=>a.category.localeCompare(b.category,'zh') || a.name.localeCompare(b.name,'zh'));
   return `<section class="page"><div class="eyebrow space">SHARED PLAYBOOKS</div><h1 class="h1 space">把经验，变成模板。</h1><p class="muted space">全社团共享 · 每位成员都能创建、编辑和分类</p>${syncRow(s)}${error(s)}<div class="row between section"><h2 class="h2">任务模板</h2>${link('/template-edit','＋ 新建模板','primary compact')}</div><div class="search-box"><input name="search" aria-label="搜索模板" placeholder="搜索模板、分类或说明" value="${e(s.search)}"></div><label class="label" for="templateCategory">按分类查看</label><select id="templateCategory" name="templateCategory">${options([['','全部分类'],...categories(b).map(c=>[c,c])],s.category || '')}</select>
-  <div class="section">${shown.map(t => `<article class="card template-card"><div class="row between"><span class="pill">${e(t.category)}</span><span class="small muted">${t.steps.length} 项子任务</span></div><h2 class="h2 space wrap">${e(t.name)}</h2>${t.roles?.length?`<p class="small muted space wrap">${t.roles.length} 个角色：${e(t.roles.map(role=>role.name).join("、"))}</p>`:''}${t.durationMinutes?`<p class="task-duration space">默认时长：${e(durationText(t.durationMinutes))}</p>`:''}${t.description?`<p class="small muted space prewrap">${e(t.description)}</p>`:''}<ol class="template-timeline">${t.steps.map(step=>`<li><span class="offset-badge">${step.daysBefore?'提前 '+step.daysBefore+' 天':'当天'}</span><div class="grow wrap">${e(step.title)}${assignmentLabel(step,b,t.roles)?`<div class="small muted">${e(assignmentLabel(step,b,t.roles))}</div>`:''}${stepDependencies(step,t.steps)}</div></li>`).join('')}</ol><p class="hint">最近由 ${e(b.members.find(m=>m.id===t.updatedBy)?.name || '社团成员')} 更新</p><div class="row space">${link('/edit?template='+encodeURIComponent(t._id),'使用模板 →','primary compact grow center')}${link('/template-edit?id='+encodeURIComponent(t._id),'编辑 / 分类','secondary compact')}${link('/template-edit?copy='+encodeURIComponent(t._id),'复制','plain small')}</div>${t.creatorId===b.me.id || b.me.role==='owner'?button('archiveTemplate','归档模板','plain small space',`data-id="${e(t._id)}" ${busy(s)}`):''}</article>`).join('') || '<div class="card empty">没有匹配的模板，试试其他分类或创建一个。</div>'}</div></section>${nav('templates',b)}`;
+  <div class="section">${shown.map(t => `<article class="card template-card"><div class="row between"><span class="pill">${e(t.category)}</span><span class="small muted">${t.steps.length} 项子任务</span></div><h2 class="h2 space wrap">${e(t.name)}</h2>${t.roles?.length?`<p class="small muted space wrap">${t.roles.length} 个角色：${e(t.roles.map(role=>role.name).join("、"))}</p>`:''}${t.durationMinutes?`<p class="task-duration space">默认时长：${e(durationText(t.durationMinutes))}</p>`:''}${t.schedulingMode==='backward'?'<p class="small space">按依赖与耗时倒排</p>':''}${t.description?`<p class="small muted space prewrap">${e(t.description)}</p>`:''}<ol class="template-timeline">${t.steps.map((step,index)=>`<li><span class="offset-badge">${e(templateStepTiming(t,step,index))}</span><div class="grow wrap">${e(step.title)}${assignmentLabel(step,b,t.roles)?`<div class="small muted">${e(assignmentLabel(step,b,t.roles))}</div>`:''}${stepDependencies(step,t.steps)}</div></li>`).join('')}</ol><p class="hint">最近由 ${e(b.members.find(m=>m.id===t.updatedBy)?.name || '社团成员')} 更新</p><div class="row space">${link('/edit?template='+encodeURIComponent(t._id),'使用模板 →','primary compact grow center')}${link('/template-edit?id='+encodeURIComponent(t._id),'编辑 / 分类','secondary compact')}${link('/template-edit?copy='+encodeURIComponent(t._id),'复制','plain small')}</div>${t.creatorId===b.me.id || b.me.role==='owner'?button('archiveTemplate','归档模板','plain small space',`data-id="${e(t._id)}" ${busy(s)}`):''}</article>`).join('') || '<div class="card empty">没有匹配的模板，试试其他分类或创建一个。</div>'}</div></section>${nav('templates',b)}`;
 }
 
 export function templatePicker(s) {
@@ -37,33 +37,25 @@ export function roleEditors(s, templateMode = false) {
 }
 
 export function stepEditors(s, templateMode = false) {
-  const b=s.editBoard, steps=s.steps || [], roles=s.form.roles || [];
+  const b=s.editBoard, steps=s.steps || [], roles=s.form.roles || [], backward=s.form.schedulingMode==='backward', plan=stepPlan(s,templateMode);
   const renderStep = (step,index) => {
     const ids=resolveParticipants(step,b.members,s.form);
     const people=step.roleId ? assignmentLabel(step,b,roles)+(templateMode?'（使用时选人）':ids.length?' · '+memberNames(ids,b):' · 待选人') : step.followMain ? '跟随主任务负责人'+(ids.length?' · '+memberNames(ids,b):'（使用时自动填入）') : assignmentLabel(step,b) || (templateMode?'负责人：使用时选择':'尚未指定负责人');
     const assignmentMode=step.roleId?'role':step.followMain?'main':'manual';
     const attr = key=>`data-step="${index}" data-field="${key}"`;
     const name = key=>`step-${index}-${key}`;
-    let dueText='', invalid=false;
-    if (!templateMode) {
-      try {
-        const due=draftDeadline(s.form,step), p=parts(due);
-        dueText=p.date+' '+p.time;
-        invalid=due<=Date.now();
-        if (invalid) dueText+=' · 已过期，请调整';
-        else if (due>draftDeadline(s.form,{daysBefore:0})) { invalid=true; dueText+=' · 晚于主任务，请调整'; }
-      } catch { dueText='请设置有效的主任务日期和提前天数'; invalid=true; }
-    }
-    return `<details class="card step-card" data-step-panel="${index}" ${s.openSteps?.has(index)?'open':''}><summary><span class="step-number">${index+1}</span><div class="grow"><strong class="wrap">${e(step.title || '新子任务')}</strong><div class="small muted">${step.customDeadline&&!templateMode?'单独日期':step.daysBefore===0?'主任务当天':'提前 '+e(step.daysBefore)+' 天'}${!templateMode?` · <span class="${invalid?'due overdue':''}">${e(dueText)}</span>`:''}</div><div class="small ${ids.length||templateMode?'muted':'due soon'}">${e(people)}</div>${stepDependencies(step,steps)}</div><span class="step-chevron">⌄</span></summary><div class="step-fields">
+    const row=plan.rows[index], invalid=!!plan.error || (!templateMode&&row&&(row.dueAt<=Date.now()||(backward&&row.startAt<Date.now())));
+    const dueText=plan.error || (row?planMoment(row.dueAt,templateMode):'请补全日期');
+    const timing=backward?'倒排截止：'+dueText:step.customDeadline&&!templateMode?'单独日期':step.daysBefore===0?'主任务当天':'提前 '+step.daysBefore+' 天';
+    return `<details class="card step-card" data-step-panel="${index}" ${s.openSteps?.has(index)?'open':''}><summary><span class="step-number">${index+1}</span><div class="grow"><strong class="wrap">${e(step.title || '新子任务')}</strong><div class="small muted">${e(timing)}${!templateMode&&!backward?` · <span class="${invalid?'due overdue':''}">${e(dueText)}</span>`:''}</div><div class="small ${ids.length||templateMode?'muted':'due soon'}">${e(people)}</div>${stepDependencies(step,steps)}</div><span class="step-chevron">⌄</span></summary><div class="step-fields">
     <div data-tour="child-title">${field(name('title'),'子任务名称',step.title,'text',`required maxlength="80" ${attr('title')}`)}</div><div class="field"><label class="label" for="${name('description')}">任务说明</label><textarea id="${name('description')}" name="${name('description')}" maxlength="2000" ${attr('description')}>${e(step.description)}</textarea></div>
-    ${dependencyPicker(step,steps,index)}
-    <div data-tour="child-deadline">${field(name('daysBefore'),'比主任务提前几天',step.daysBefore,'number',`required min="0" max="365" step="1" ${attr('daysBefore')}`)}
-    ${!templateMode?`<div class="deadline-preview ${invalid?'invalid':''}">${step.customDeadline?'单独截止':'自动计算'}：${e(dueText)}（北京时间）</div>${step.customDeadline?`<div class="row space">${field(name('date'),'子任务截止日期',step.date,'date',`required ${attr('date')}`)}${field(name('time'),'子任务时间',step.time,'time',`required ${attr('time')}`)}</div>${button('stepRelative','恢复按提前天数计算','plain small',`data-index="${index}"`)}`:button('stepCustom','单独调整日期 / 时间','plain small space',`data-index="${index}"`)}`:''}
+    ${dependencyPicker(step,steps,index,backward)}
+    <div data-tour="child-deadline">${stepDeadlineEditor(s,step,index,templateMode,plan)}
     </div><div class="row space"><div class="field grow"><label class="label" for="${name('mode')}">完成方式</label><select id="${name('mode')}" name="${name('mode')}" ${attr('mode')}>${options([['individual','逐人完成'],['shared','协作完成']],step.mode)}</select></div><div class="field grow"><label class="label" for="${name('priority')}">优先级</label><select id="${name('priority')}" name="${name('priority')}" ${attr('priority')}>${options([['normal','普通'],['high','优先处理']],step.priority)}</select></div></div>
     <div data-tour="child-people"><div class="label">${templateMode?'默认负责人（可留空）':'子任务负责人'} · ${ids.length} 人</div><div class="chips">${[['manual','单独指定'],['main','跟随主任务负责人'],...(roles.length?[['role','按角色分配']]:[])].map(([value,label])=>button('stepFollow',label,'chip '+(value===assignmentMode?'active':''),`data-index="${index}" data-value="${value}" aria-pressed="${value===assignmentMode}"`)).join('')}</div>${step.roleId?`<div class="field space"><label class="label" for="${name('roleId')}">负责角色</label><select id="${name('roleId')}" name="${name('roleId')}" ${attr('roleId')}>${options(roles.map((role,i)=>[role.id,role.name || '角色 '+(i+1)+'（未命名）']),step.roleId)}</select></div><p class="hint">${templateMode?'使用模板时为这个角色选人，所有关联子任务一起分配。':'请在上方“按角色选人”中调整，所有关联步骤同步更新。切换为“单独指定”可单独调整这一步。'}</p>`:step.followMain?`<p class="hint">${ids.length?'当前：'+e(memberNames(ids,b))+'。':'使用模板时自动填入。'}主任务选中的所有人都会负责这一步；发布前修改主任务名单时同步更新。</p>`:assigneePicker(step,b,{stepIndex:index,templateMode})}
     </div><div class="row between space"><div class="row">${button('stepUp','↑ 上移','plain small',`data-index="${index}" ${index===0?'disabled':''}`)}${button('stepDown','↓ 下移','plain small',`data-index="${index}" ${index===steps.length-1?'disabled':''}`)}</div>${button('removeStep','移除这一步','danger compact',`data-index="${index}"`)}</div></div></details>`;
   };
-  return `<section class="section"><div class="row between"><h2 class="h2">${templateMode?'预设子任务':'子任务与截止日期'} · ${steps.length}</h2>${!templateMode&&steps.length?button('assignStepsToMe','全部交给我','plain small'):''}</div><p class="hint">${templateMode?'提前天数相对主任务截止时间计算；负责人可以预设，也可在使用时选择。':'点击每一步展开编辑。调整主任务日期会重算相对日期，单独设置的日期会保留。'}</p><div class="space">${steps.map(renderStep).join('')}</div>${button('addStep','＋ 添加一步','secondary full',steps.length>=MAX_STEPS?'disabled':'')}<p class="hint">最多 ${MAX_STEPS} 步。${!templateMode?'发布后，各负责人可在“我的待办”和日历中查看自己的任务。':''}</p></section>`;
+  return `<section class="section"><div class="row between"><h2 class="h2">${templateMode?'预设子任务':'子任务与截止日期'} · ${steps.length}</h2>${!templateMode&&steps.length?button('assignStepsToMe','全部交给我','plain small'):''}</div><p class="hint">${templateMode?'负责人可以预设，也可在使用时选择。':'点击每一步展开编辑；发布前可调整本次计划。'}</p>${schedulingSelector(s)}${planningPreview(s,templateMode,plan)}<div class="space">${steps.map(renderStep).join('')}</div>${button('addStep','＋ 添加一步','secondary full',steps.length>=MAX_STEPS?'disabled':'')}<p class="hint">最多 ${MAX_STEPS} 步。${!templateMode?'发布后，各负责人可在“我的待办”和日历中查看自己的任务。':''}</p></section>`;
 }
 
 export function templateEditor(s) {

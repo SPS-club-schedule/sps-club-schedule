@@ -446,3 +446,27 @@ test('informational dependencies survive SQLite restart and allow completing a d
   assert.deepEqual(board.tasks.find(t=>t._id===text._id).completions,{});
   assert.equal((await api('createTaskGroup',input)).taskId,result.taskId);
 });
+
+test('backward scheduling persists estimates and computes conservative deadlines inside the Worker transaction',async()=>{
+  const before=await api('bootstrap',{clubId}),base=templateHelpers.seminarTemplate(),day=86400000;
+  const step={...base.steps[0],daysBefore:0,anchorToMain:false,participantIds:[before.me.id]};
+  const {template}=await api('createTemplate',{...base,schedulingMode:'backward',clubId,requestId:'backward-runtime-template',steps:[
+    {...step,id:'copy',title:'文案',estimateMinutes:4320,dependsOn:[]},
+    {...step,id:'poster',title:'海报',estimateMinutes:1440,dependsOn:['copy']},
+    {...step,id:'share',title:'宣传',estimateMinutes:1440,dependsOn:['poster'],anchorToMain:true,daysBefore:1}
+  ]});
+  await mf.dispose();mf=new Miniflare(options);
+  const saved=(await api('sync',{clubId,since:before.version})).templates.find(t=>t._id===template._id);
+  assert.equal(saved.schedulingMode,'backward');assert.equal(saved.steps[0].estimateMinutes,4320);
+  assert.deepEqual((await api('createTemplate',{...saved,requestId:'backward-runtime-copy'})).template.steps,saved.steps);
+  const dueAt=Date.now()+20*day,input={...saved,templateId:saved._id,clubId,requestId:'backward-runtime-group',dueAt,participantIds:[before.me.id],subtasks:saved.steps};
+  const tooLate=await post('/api',{action:'createTaskGroup',input:{...input,dueAt:Date.now()+5*day}},owner.token);assert.equal(tooLate.status,400);
+  const result=await api('createTaskGroup',input);
+  assert.deepEqual(result.tasks.slice(1).map(t=>dueAt-t.dueAt),[3*day,2*day,day]);
+  const completed=await api('complete',{taskId:result.tasks[2]._id,done:true});assert.ok(completed.task.completions[before.me.id]);
+  await mf.dispose();mf=new Miniflare(options);
+  const tasks=(await api('bootstrap',{clubId})).tasks;
+  assert.equal(tasks.find(t=>t._id===result.tasks[1]._id).estimateMinutes,4320);
+  assert.equal(tasks.find(t=>t._id===result.tasks[1]._id).dueAt,dueAt-3*day);
+  assert.equal((await api('createTaskGroup',input)).taskId,result.taskId);
+});

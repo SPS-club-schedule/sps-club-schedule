@@ -1,0 +1,11 @@
+# Conservative backward scheduling — 2026-11-04
+
+- Local application tests: 150 passed (including 7 pre-existing uncommitted Android tests). Worker/SQLite integration tests: 50 passed. Gateway tests: 4 passed. Frontend build and whitespace checks passed.
+- Pure planner checks cover the user's 3/1/1-day chain, multiple prerequisites, shared predecessors, intermediate anchors, custom date caps, zero-duration milestones, disconnected nodes, fractional days, Beijing leap/year boundaries, legacy independent mode, draft isolation and switching modes.
+- Compared 35 varied seven-node DAGs with exhaustive downstream path bounds, in both original and reversed input order. Every computed deadline matched the most restrictive bound.
+- Domain checks cover save/copy/sync, conservative server-side recomputation, atomic rejection of invalid estimates/anchors/cycles, insufficient lead time, old-client protection, retry idempotency, completion without completed prerequisites, and isolation of published deadlines from later template edits.
+- Worker tests verify actual SQLite restart persistence, copy, rejection of insufficient preparation time, final 3/2/1-day deadlines, persisted estimates and completion/retry behavior.
+- Browser QA used a synthetic local club and isolated Worker. Enabled backward scheduling, entered 3/1/1 days, set copy/poster to dependency scheduling and publicity to at least 1 day before the main deadline. The template preview showed starts 6/3/2 days before and deadlines 3/2/1 days before.
+- Saved and applied the template. The initial near-term date displayed insufficient lead time; moving the main deadline to 2026-11-20 20:00 recalculated copy/poster/publicity deadlines to Nov 17/18/19 at 20:00, with copy starting Nov 14. Published tasks matched the preview.
+- Poster detail showed the 1-day estimate and Nov 17 suggested start. Completed the poster with copy still incomplete. No browser errors. Mobile preview at 375 × 812 had scrollWidth === innerWidth === 375; viewport restored. Ignored proof screenshot: qa/backward-preview-mobile.jpg.
+- New fields stay in existing JSON records. No database migrations, production template edits, task rewrites, binding changes or calendar-duration changes.

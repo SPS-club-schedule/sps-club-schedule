@@ -4,6 +4,7 @@ const MAX_ROLES = 20;
 const { parseDeadline } = require('./view');
 const { resolveParticipants } = require('./assignments');
 const { normalizeStepDependencies } = require('./step-dependencies');
+const { schedulingMode, planningFields, draftPlanningFields, computeStepSchedule } = require('./backward-schedule');
 function seminarTemplate() {
   return {
     name: '研讨班 Seminar', category: '学术活动', title: '研讨班', description: '',
@@ -23,9 +24,16 @@ function relativeDeadline(mainDueAt, daysBefore) {
 function templateDraft(template, members) {
   const ids = new Set(members.map(m => m.id));
   const copy = item => ({ title: item.title, description: item.description, mode: item.mode, priority: item.priority, participantDepartment: item.participantDepartment || '', participantIds: resolveParticipants({ ...item, followMain: false }, members).filter(id => ids.has(id)) });
-  return { ...copy(template), roles:(template.roles || []).map(role=>({id:role.id,name:role.name,participantIds:[],participantDepartment:''})), durationMinutes:template.durationMinutes ?? null, steps: normalizeStepDependencies(template.steps).map(step => ({ ...copy(step), id:step.id, dependsOn:step.dependsOn, roleId:step.roleId || '', followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
+  return { ...copy(template), schedulingMode:schedulingMode(template.schedulingMode), roles:(template.roles || []).map(role=>({id:role.id,name:role.name,participantIds:[],participantDepartment:''})), durationMinutes:template.durationMinutes ?? null, steps: normalizeStepDependencies(template.steps).map(step => ({ ...copy(step), ...planningFields(step), estimateDays:step.estimateMinutes==null?'':step.estimateMinutes/1440, id:step.id, dependsOn:step.dependsOn, roleId:step.roleId || '', followMain: step.followMain === true, daysBefore: step.daysBefore, customDeadline: false })) };
 }
-function draftDeadline(main, step) {
+function draftSchedule(main, steps, mainDueAt=parseDeadline(main.date,main.time)) {
+  return computeStepSchedule(mainDueAt,steps.map(step=>({...step,...draftPlanningFields(step,main.schedulingMode==='backward'),dueAt:step.customDeadline?parseDeadline(step.date,step.time):undefined})),main.schedulingMode);
+}
+function draftDeadline(main, step, steps) {
+  if (main.schedulingMode==='backward') {
+    if (!steps) throw new Error('倒排需要完整的子任务列表');
+    return draftSchedule(main,steps).find(row=>row.id===step.id).dueAt;
+  }
   return step.customDeadline ? parseDeadline(step.date, step.time) : relativeDeadline(parseDeadline(main.date, main.time), step.daysBefore);
 }
-module.exports = { DAY, MAX_STEPS, MAX_ROLES, seminarTemplate, relativeDeadline, templateDraft, draftDeadline };
+module.exports = { DAY, MAX_STEPS, MAX_ROLES, seminarTemplate, relativeDeadline, templateDraft, draftDeadline, draftSchedule };

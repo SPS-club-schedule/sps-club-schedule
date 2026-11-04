@@ -9,6 +9,7 @@ import { resolveParticipants } from '../shared/assignments';
 import { assigneePicker } from './assignee-picker';
 import { scheduleEditor } from './schedule-editor';
 import { taskDependencies } from './dependency-views';
+import { publishedPlanning } from './planning-views';
 export { e } from './ui';
 export { templates, templateEditor } from './template-views';
 export { admin, adminEditor, resetPassword } from './admin-views';
@@ -64,7 +65,7 @@ export function detail(s) {
   const b=s.sync.board, raw=b?.tasks.find(t=>t._id===s.id), t=raw?taskView(raw,b):null;
   return `<section class="page">${link('/board','← 返回任务看板','plain small')}${syncRow(s)}${error(s)}${!t?'<div class="empty">'+(b?'任务不存在或已归档':'正在加载任务…')+'</div>':`
   ${parentLink(t)}<div class="chips space">${t.parentTaskId?'<span class="pill">子任务</span>':''}<span class="pill">${t.modeLabel}</span><span class="pill ${t.status}">${t.statusLabel}</span></div><h1 class="h1 section wrap">${e(t.title)}</h1><div class="small muted space">由 ${e(t.creatorName)} 发布</div>
-  <div class="card section"><div class="small muted">截止时间 · 北京时间</div><div class="h2 space">${t.fullDue}</div>${t.hasDuration?`<div class="divider"></div><div class="small muted">持续时段 · 北京时间</div><div class="task-duration space">${e(t.durationLabel)}</div><p class="small space">地点：${e(t.location || '未定')}</p>${b.bookingEnabled?'<p class="hint space">此时段作为 SPS 活动自动同步到预约页。</p>':''}`:''}<div class="divider"></div><div class="prewrap">${e(t.description||'发布者暂未添加任务说明。')}</div></div>
+  <div class="card section"><div class="small muted">截止时间 · 北京时间</div><div class="h2 space">${t.fullDue}</div>${publishedPlanning(t)}${t.hasDuration?`<div class="divider"></div><div class="small muted">持续时段 · 北京时间</div><div class="task-duration space">${e(t.durationLabel)}</div><p class="small space">地点：${e(t.location || '未定')}</p>${b.bookingEnabled?'<p class="hint space">此时段作为 SPS 活动自动同步到预约页。</p>':''}`:''}<div class="divider"></div><div class="prewrap">${e(t.description||'发布者暂未添加任务说明。')}</div></div>
   ${taskDependencies(t,b,true)}
   <div class="row between section"><h2 class="h2">${t.mode==='individual'?'成员进度':'协作成员'}</h2><span class="small muted">${e(t.progressLabel)}</span></div><div class="progress space"><div class="progress-fill" style="width:${t.percent}%"></div></div>
   <div class="card space">${t.participants.map(m=>`<div class="row between person-row"><div class="row"><div class="avatar">${e(m.initial)}</div><span>${e(m.name)}</span></div><span class="small ${m.done?'success-text':'muted'}">${m.done?'✓ '+m.completionLabel:t.mode==='shared'&&t.done?'协作已完成':'待完成'}</span></div>`).join('')}</div>

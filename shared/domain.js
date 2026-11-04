@@ -1,10 +1,11 @@
 'use strict';
-const { seminarTemplate, relativeDeadline, MAX_STEPS, MAX_ROLES } = require('./templates');
+const { seminarTemplate, MAX_STEPS, MAX_ROLES } = require('./templates');
 const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments');
 const { isAdmin } = require('./permissions');
 const { resolveParticipants } = require('./assignments');
 const { validDurationMinutes } = require('./template-duration');
 const { normalizeStepDependencies } = require('./step-dependencies');
+const { schedulingMode, planningFields, computeStepSchedule } = require('./backward-schedule');
 
 // Shared by the cloud function and the local demonstration. Identity is injected
 // by the adapter; no action trusts a member ID supplied as the caller.
@@ -106,21 +107,31 @@ function createService({ store, now, randomId, hash }) {
     try { return normalizeStepDependencies(steps); }
     catch (error) { fail('VALIDATION',error.message); }
   }
+  function planningMode(input, previous = null) {
+    if (input.schedulingMode===undefined && (previous?.schedulingMode==='backward'||previous?.steps.some(step=>step.estimateMinutes!=null||step.anchorToMain===false))) fail('CONFLICT','此模板已设置耗时倒排，请刷新页面后重新编辑或套用');
+    try { return schedulingMode(input.schedulingMode); }
+    catch (error) { fail('VALIDATION',error.message); }
+  }
+  function stepPlanning(step, mode) {
+    try { return planningFields(step,mode==='backward'); }
+    catch (error) { fail('VALIDATION',error.message); }
+  }
   function templateContent(input, roster, previous = null) {
     if (!Array.isArray(input.steps) || !input.steps.length || input.steps.length > MAX_STEPS) fail('VALIDATION', `模板须包含1—${MAX_STEPS}项子任务`);
     // Old editors cannot safely match reordered steps to their role bindings.
     if (input.roles === undefined && previous?.roles?.length) fail('CONFLICT','此模板已设置角色分工，请刷新页面后重新编辑');
     const roles=templateRoles(input.roles);
+    const schedulingMode=planningMode(input,previous);
     const main = assignment(input, roster, { optional: true, template: true });
     const durationMinutes=input.durationMinutes===undefined?previous?.durationMinutes ?? null:input.durationMinutes;
     if (durationMinutes!==null && !validDurationMinutes(durationMinutes)) fail('VALIDATION','默认时长须为正整数分钟，且不能超过五年');
     return {
-      durationMinutes, roles,
+      durationMinutes, roles, schedulingMode,
       name: text(input.name, '模板名称', 80), category: text(input.category || '', '分类', 30, true) || '未分类',
       ...content(input), ...main,
       steps: dependencySteps(input.steps,previous).map(step => {
         if (!step || typeof step !== 'object') fail('VALIDATION', '子任务格式无效');
-        return { ...content(step), ...assignment(step, roster, { optional: true, template: true, main, roles }), daysBefore: offset(step.daysBefore), id:step.id, dependsOn:step.dependsOn };
+        return { ...content(step), ...assignment(step, roster, { optional: true, template: true, main, roles }), ...stepPlanning(step,schedulingMode), daysBefore: offset(step.daysBefore), id:step.id, dependsOn:step.dependsOn };
       })
     };
   }
@@ -354,18 +365,23 @@ function createService({ store, now, randomId, hash }) {
           sourceTemplate = { id: template._id, name: template.name };
         }
         const steps=dependencySteps(input.subtasks,template);
+        const schedulingMode=planningMode(input,template);
+        let plan;
+        try { plan=computeStepSchedule(dueAt,steps,schedulingMode); }
+        catch (error) { fail('VALIDATION',error.message); }
         const taskIds=new Map(steps.map((step,index)=>[step.id,taskId+'_'+index]));
         const children = steps.map((step, index) => {
           if (!step || typeof step !== 'object') fail('VALIDATION', '子任务格式无效');
           const daysBefore = offset(step.daysBefore);
-          const childDue = step.dueAt === undefined ? relativeDeadline(dueAt, daysBefore) : step.dueAt;
+          const childDue = plan[index].dueAt;
           if (!Number.isSafeInteger(childDue) || childDue <= now()) fail('VALIDATION', `子任务${index + 1}的截止时间已过，请调整日期或提前天数`);
           if (childDue > dueAt) fail('VALIDATION', `子任务${index + 1}不能晚于主任务截止`);
-          return { ...content(step), ...assignment(step, roster, { main: fields, roles }), ...schedule({...step,dueAt:childDue},null,true), daysBefore, dependsOnTaskIds:step.dependsOn.map(id=>taskIds.get(id)) };
+          if (schedulingMode==='backward'&&plan[index].startAt<now()) fail('VALIDATION',`「${step.title}」按预计耗时需在过去开始，请调迟主任务或调整计划`);
+          return { ...content(step), ...assignment(step, roster, { main: fields, roles }), ...schedule({...step,dueAt:childDue},null,true), daysBefore, ...(schedulingMode==='backward'?{estimateMinutes:step.estimateMinutes}:{}), dependsOnTaskIds:step.dependsOn.map(id=>taskIds.get(id)) };
         });
         const change = await stamp(tx, input.clubId, 'tasks');
         const common = { clubId: input.clubId, creatorId: me._id, createdAt: now(), updatedAt: now(), revision: 1, syncVersion: change.version, archived: false, completions: {}, sharedCompletion: null };
-        const task = { ...fields, ...common, _id: taskId, dueAt, ...(sourceTemplate ? { sourceTemplate } : {}) };
+        const task = { ...fields, ...common, _id: taskId, dueAt, schedulingMode, ...(sourceTemplate ? { sourceTemplate } : {}) };
         const tasks = [task, ...children.map((child, index) => ({ ...child, ...common, _id: taskId + '_' + index, parentTaskId: taskId, parentCreatorId: me._id }))];
         for (const item of tasks) await tx.put('tasks', item._id, item);
         return { ...change, taskId, task, tasks };
