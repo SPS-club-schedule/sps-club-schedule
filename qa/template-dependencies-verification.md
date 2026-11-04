@@ -8,3 +8,5 @@
 - Applied the saved template, selected a future date, assigned the steps, and published. Parent detail showed the linked prerequisite. Completed the poster while its copy prerequisite remained incomplete; both states appeared together in the poster detail.
 - Reopened the saved template and verified the selection. At 375 × 812 the editor and task detail both had `scrollWidth === innerWidth === 375`. Saved local ignored screenshots: `qa/dependencies-editor-mobile.jpg` and `qa/dependencies-completion.jpg`. Browser error log was empty; viewport override reset.
 - No production task or template data are rewritten by this release. Existing templates can be edited to set relationships explicitly.
+
+- The first CI run exposed an existing role test assuming the first SQLite template had at least three steps. Role and dependency fixtures now use the canonical seminar definition, independent of database row order.

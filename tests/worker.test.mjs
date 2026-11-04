@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
+import templateHelpers from '../shared/templates.js';
 let mf, options, directory, owner, alice, clubId, invite, memberIds;
 const password = 'Test-only-password-2026!';
 async function post(route, data, token, origin = 'https://site.test') {
@@ -404,7 +405,7 @@ test('template default duration survives SQLite restart, delta sync, copying and
 });
 
 test('template roles persist across SQLite restart and resolve atomically when publishing a group',async()=>{
-  const before=await api('bootstrap',{clubId}), base=before.templates[0];
+  const before=await api('bootstrap',{clubId}), base=templateHelpers.seminarTemplate();
   const roles=[{id:'speaker',name:'主讲人'},{id:'poster',name:'海报制作人'}];
   const {template}=await api('createTemplate',{...base,clubId,requestId:'roles-runtime-template',roles,steps:base.steps.map((step,i)=>({...step,roleId:i%2?'speaker':'poster',followMain:false,participantDepartment:''}))});
   await mf.dispose(); mf=new Miniflare(options);
@@ -424,7 +425,7 @@ test('template roles persist across SQLite restart and resolve atomically when p
 });
 
 test('informational dependencies survive SQLite restart and allow completing a dependent before its prerequisite',async()=>{
-  const before=await api('bootstrap',{clubId}),base=before.templates[0];
+  const before=await api('bootstrap',{clubId}),base=templateHelpers.seminarTemplate();
   const fields={...base.steps[0],roleId:'',followMain:false,participantDepartment:'',participantIds:[before.me.id],daysBefore:1};
   const {template}=await api('createTemplate',{...base,roles:[],clubId,requestId:'dependencies-runtime-template',steps:[{...fields,id:'poster',title:'海报',dependsOn:['copy']},{...fields,id:'copy',title:'文案',dependsOn:[]}]});
   await mf.dispose();mf=new Miniflare(options);
