@@ -15,4 +15,14 @@
 
 ## 发布
 
-待发布后补充实际 Worker 版本、Pages 工作流和公网验证结果。
+- 功能提交：`35489f901094efa5e9787506e828aca0760a8185`。
+- 业务 Worker：`sps-club-api`，2026-11-04 15:11 UTC 发布；当前100%流量版本 `742304d9-fe7e-4724-8d71-0a30fd7fc161`。
+- Wrangler 确认 Cron `* * * * *` 已部署。Miniflare 已执行真实 scheduled 入口；本次短时生产 tail 未捕获定时事件，未据此宣称生产定时邮件已投递。
+- 发布前实时读取 Secret 名称，确认 `RESEND_API_KEY` 存在；未读取或输出其值。
+- [GitHub Pages 工作流 41855408617](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/41855408617)：build/deploy 全部 success，CI 在 Node 22 完成全部229项测试。
+- 公网版本：`b13080368b504becd57cec42b6d4028d`，脚本 `app-O73OQIW2.js`。
+- 公网 `/health`：HTTP 200，`{ "ok": true, "service": "sps-club-api" }`。
+- 公网注册不填邮箱：HTTP 400，“请填写常用邮箱”；此探测未创建账号。
+- 公网 `/internal/mail-tick`：HTTP 404；发送入口不能由外部用户调用。
+- Chrome 重新打开正式网站，注册页已显示常用邮箱输入框与注册后验证说明；截图 `qa/email-live-registration-20261104.png`。
+- 实际收件验收待成员自行绑定常用邮箱，输入收到的验证码；本轮未创建生产测试账号或向真实成员发送测试邮件。
