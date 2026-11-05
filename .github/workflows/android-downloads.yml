@@ -1,0 +1,28 @@
+name: Verify Android share ZIP on Windows
+on:
+  push:
+    branches: [main]
+    paths: ['public/downloads/**', '.github/workflows/android-downloads.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  extract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract share packages with Windows PowerShell and compare APKs
+        shell: powershell
+        run: |
+          $archives = @(Get-ChildItem public/downloads/*.zip)
+          if (!$archives.Count) { throw "Missing Android share ZIP" }
+          foreach ($archive in $archives) {
+            $out = Join-Path $env:RUNNER_TEMP $archive.BaseName
+            Expand-Archive -LiteralPath $archive.FullName -DestinationPath $out
+            $apk = $archive.BaseName + '.apk'
+            $expected = Get-FileHash (Join-Path $archive.DirectoryName $apk)
+            $actual = Get-FileHash (Join-Path $out $apk)
+            if ($expected.Hash -ne $actual.Hash) { throw "Extracted APK differs from download" }
+            if (!(Test-Path (Join-Path $out 'README.txt'))) { throw "Missing install instructions" }
+            Write-Output "$apk extracted successfully; SHA-256 $($actual.Hash)"
+          }

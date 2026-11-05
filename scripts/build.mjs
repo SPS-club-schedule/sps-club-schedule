@@ -25,6 +25,7 @@ await fs.writeFile(path.join(root,'dist',style),styles);
 const csp = `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ${api.origin} ${bookingApi.origin}; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'`;
 const html=(await fs.readFile(path.join(root,'client/index.html'),'utf8')).replace('__CSP__',csp);
 await fs.writeFile(path.join(root,'dist/index.html'),html);
+await fs.cp(path.join(root,'public/downloads'),path.join(root,'dist/downloads'),{recursive:true});
 await fs.copyFile(path.join(root,'client/bootstrap.js'),path.join(root,'dist/bootstrap.js'));
 // Older cached HTML still references these fixed paths during the transition.
 await fs.copyFile(path.join(root,'client/bootstrap.js'),path.join(root,'dist/assets/app.js'));

@@ -17,6 +17,13 @@ export { admin, adminEditor, resetPassword } from './admin-views';
 export { accountSettings } from './account-views';
 export { archives } from './archive-views';
 export {experience} from './experience';
+const androidVersion = '1.2.0';
+const androidPackage = './downloads/SPS-Schedule-' + androidVersion;
+const androidDownloads = `<div class="android-downloads">
+  <div><a class="secondary compact" href="${androidPackage}.apk" download>下载安卓 App</a>
+  <a class="plain small" href="${androidPackage}.zip" download>微信分享包（ZIP）</a></div>
+  <p class="hint">v${androidVersion} · 适用于 Android 8.0 及以上</p>
+</div>`;
 const brand = `<div class="brand-mark">SPS</div><div class="eyebrow">BETTER TOGETHER</div><h1 class="h1 space">社团的每一件事，<br>一起完成。</h1><p class="muted space">安排任务，约定时间，让每一份参与都有回应。</p>`;
 const parentLink = t => t.parentTaskId && t.parentVisible!==false ? link('/task?id='+encodeURIComponent(t.parentTaskId),'↳ '+e(t.parentTitle),'parent-task-link small') : '';
 function subtasks(t, b, s) {
@@ -36,7 +43,7 @@ export function auth(s) {
     ${register ? `${field('email','常用邮箱',f.email,'email','required maxlength="254" autocomplete="email" autocapitalize="none" spellcheck="false" placeholder="用于任务邮件提醒，注册后需验证"')}${field('nickname','你在社团里的称呼',f.nickname,'text','required maxlength="20" autocomplete="nickname"')}<div class="chips field">${button('joinMode','加入已有社团','chip '+(s.joinMode==='join'?'active':''),'data-value="join"')}${button('joinMode','创建社团','chip '+(s.joinMode==='create'?'active':''),'data-value="create"')}</div>${s.joinMode==='join'?field('invite','社团邀请码',f.invite,'text','required maxlength="64" autocomplete="off" placeholder="粘贴管理员发来的邀请码"'):field('name','社团名称',f.name||'SPS 社团日程','text','required maxlength="30"')}` : ''}
     ${error(s)}<button class="primary full" type="submit" ${busy(s)}>${s.busy?'正在处理…':recover?'重设密码':register?'创建账号，开始协作 →':'登录，继续协作 →'}</button>
     ${!register ? button('authMode',recover?'返回登录':'忘记密码？用恢复码找回','plain small space',`data-value="${recover?'login':'recover'}"`) : '<p class="hint">使用部门邀请码会自动归入对应部门。社团成员可以看到彼此的称呼、部门、任务及完成情况。</p>'}
-  </form><p class="space center">${link('/experience','公开浏览 SPS 经验档案 →','plain small')}</p></section>`;
+  </form>${!register && !recover ? androidDownloads : ''}<p class="space center">${link('/experience','公开浏览 SPS 经验档案 →','plain small')}</p></section>`;
 }
 export function entry(s) {
   const f = s.form;
@@ -55,7 +62,7 @@ export function board(s, mine) {
   if (s.search) shown=shown.filter(t=>(t.title+t.description+t.parentTitle).toLowerCase().includes(s.search.trim().toLowerCase()));
   shown.sort((a,b)=>Number(mine?a.myDone:a.done)-Number(mine?b.myDone:b.done)||a.dueAt-b.dueAt);
   return `<section class="page"><header class="row between masthead"><div class="row"><div class="logo">S</div><div><div class="club-name">${e(b.club.name)}</div><div class="eyebrow">CLUB WORKSPACE</div></div></div><div class="row">${s.guideHidden||isSpeaker(b.me.role)?'':button('tutorial','新手指南','secondary compact')}<div class="avatar owner">${e(b.me.name[0])}</div></div></header>${syncRow(s)}${error(s)}
-  ${mine?'':`<div class="hero"><div class="row between"><div class="small hero-date">${e(p.date.slice(5).replace('-','月'))}日 · 星期${p.weekday}</div><span class="hero-dot">✦</span></div><h1 class="hero-title">把每一件事，<br>一起做好。</h1><div class="hero-sub">${isSpeaker(b.me.role)?'主讲人工作台 · 仅显示分配给你的任务':b.members.filter(m=>!isSpeaker(m.role)).length+' 位社团成员，一起推进安排。'}</div><div class="hero-stats">${stats.map((n,i)=>`${i?'<div class="stat-divider"></div>':''}<div><div class="stat-number">${n}</div><div class="stat-label">${['进行中的任务','我的待办','已完成'][i]}</div></div>`).join('')}</div></div>
+  ${mine?androidDownloads:`<div class="hero"><div class="row between"><div class="small hero-date">${e(p.date.slice(5).replace('-','月'))}日 · 星期${p.weekday}</div><span class="hero-dot">✦</span></div><h1 class="hero-title">把每一件事，<br>一起做好。</h1><div class="hero-sub">${isSpeaker(b.me.role)?'主讲人工作台 · 仅显示分配给你的任务':b.members.filter(m=>!isSpeaker(m.role)).length+' 位社团成员，一起推进安排。'}</div><div class="hero-stats">${stats.map((n,i)=>`${i?'<div class="stat-divider"></div>':''}<div><div class="stat-number">${n}</div><div class="stat-label">${['进行中的任务','我的待办','已完成'][i]}</div></div>`).join('')}</div></div>
   ${calendar(all,s.calendar,false,now,s.booking,b,s.plannerSettings)}`}
   <div class="section row between" ${mine?'data-tour="my-todos"':''}><h2 class="h2">${mine?'我的待办':isSpeaker(b.me.role)?'我的任务':'社团任务'}</h2>${isSpeaker(b.me.role)?'':'<span data-tour="create-task">'+link('/edit','＋ 发布任务','primary compact')+'</span>'}</div><div class="search-box"><input name="search" aria-label="搜索任务" placeholder="搜索任务" value="${e(s.search)}"></div>
   <div class="row between filter-row"><div class="chips">${[['all','全部'],['pending','待完成'],['done','已完成']].map(([v,l])=>button('filter',l,'chip '+(s.filter===v?'active':''),`data-value="${v}"`)).join('')}</div><span class="small muted">${shown.length} 项</span></div>
