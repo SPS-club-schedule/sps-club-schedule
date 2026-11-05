@@ -44,3 +44,5 @@
 - APK 与旧 1.2.0 签名证书一致，APK v2 签名有效，Android 8.0+；新旧包名和签名支持覆盖升级。旧独立极简包名不同，需要改用统一版登录相同账号。
 - APK SHA-256：`6ebcc438ecc530bb836e6ac5f88180ababafc26cfafb9a4387c39dc6c84d2807`。
 - ZIP SHA-256：`35b8afe9096241d8dae0c7514a48c7ae27638422a0663ae3dbcdb4d4dc1f882b`。ZIP 仅包含同名 APK 与 UTF-8 BOM 安装说明，解压字节与签名原件一致。
+- 正式发布提交 `abaa217c5428c14cacde63e4b7b34710f835d13b`；[Pages 发布与全部检查](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/41994805953)、[Windows 分享包校验](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/41994805819) 均成功。
+- 线上版本 `3c03b4d5952466eb08113c4bfe90000b`。正式根网址在无登录状态下直接显示极简周历、两条公开预约及登录按钮；新 APK/ZIP 下载已逐字节比对签名发布原件。
