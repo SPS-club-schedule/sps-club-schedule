@@ -26,6 +26,17 @@ const selfMember = m => ({...safeMember(m),...(!m.archived&&m.departmentTemplate
 const publicMember = (m, viewer) => m._id===viewer._id ? selfMember(m) : ({...safeMember(m), ...(!m.archived ? {role:isAdmin(m.role)?'admin':isSpeaker(m.role)?'speaker':'member'} : {})});
 // Older memberships have no archived field. Only explicit tombstones are removed.
 const activeMembers = async (db, fields) => (await db.find('members', fields)).filter(m => !m.archived);
+function duplicateAccount(reason) {
+  fail('CONFLICT', reason + '。你可能已经注册过账号。如忘记密码，请联系社团管理员。');
+}
+const memberNameKey = name => name.normalize('NFKC').trim().toLowerCase();
+async function requireAvailableMemberName(db, clubId, name, currentMemberId) {
+  const key = memberNameKey(name);
+  const members = await activeMembers(db, { clubId });
+  if (members.some(m => m._id !== currentMemberId && memberNameKey(m.name) === key)) {
+    duplicateAccount('本社团已有成员使用这个姓名');
+  }
+}
 const safeClub = c => ({ id: c._id, name: c.name, inviteVersion: c.inviteVersion || 0 });
 
 function createService({ store, now, randomId, hash }) {
@@ -242,7 +253,7 @@ function createService({ store, now, randomId, hash }) {
     },
     async createClub(input, identity) {
       const name = text(input.name, '社团名称', 30);
-      const nickname = text(input.nickname, '社团内称呼', 20);
+      const nickname = text(input.nickname, '姓名', 20);
       const clubId = docKey('c_', identity, input.requestId);
       const token = randomId();
       const inviteHash = hash(token);
@@ -259,7 +270,7 @@ function createService({ store, now, randomId, hash }) {
     async joinClub(input, identity) {
       const token = text(input.token, '邀请码', 64).replace(/\s/g, '').toLowerCase();
       if (!/^[a-f0-9]{32}$/.test(token)) fail('VALIDATION', '请输入完整的32位邀请码');
-      const name = text(input.nickname, '社团内称呼', 20);
+      const name = text(input.nickname, '姓名', 20);
       return store.transaction(async tx => {
         const invite = await tx.get('invites', hash(token));
         if (!invite) fail('NOT_FOUND', '邀请已失效，请向管理员获取新邀请');
@@ -271,6 +282,7 @@ function createService({ store, now, randomId, hash }) {
         if (existing?.archived) fail('FORBIDDEN', '此账号已删除，请重新注册');
         if(existing&&((isSpeaker(existing.role)&&department&&department!=='speaker')||(!isSpeaker(existing.role)&&department==='speaker')))fail('CONFLICT','身份变更请联系管理员');
         if (department && existing?.department && existing.department !== department) fail('CONFLICT', `你已属于${departmentLabel(existing.department)}，如需调换部门请联系管理员`);
+        if (!existing) await requireAvailableMemberName(tx, invite.clubId, name);
         if (!existing || department && !existing.department) {
           const change = await stamp(tx, invite.clubId, 'members', club);
           await tx.put('members', id, { ...(existing || { clubId: invite.clubId, identity, name, role: department==='speaker'?'speaker':'member', joinedAt: now() }), department, syncVersion: change.version });
@@ -318,10 +330,11 @@ function createService({ store, now, randomId, hash }) {
       });
     },
     async renameMe(input, identity) {
-      const name = text(input.name, '社团内称呼', 20);
+      const name = text(input.name, '姓名', 20);
       return store.transaction(async tx => {
         const me = await member(tx, input.clubId, identity);
         if (me.name === name) return unchanged(tx, input.clubId, { member: selfMember(me) });
+        await requireAvailableMemberName(tx, input.clubId, name, me._id);
         const change = await stamp(tx, input.clubId, 'members');
         const updated = Object.assign({}, me, { name, syncVersion: change.version });
         await tx.put('members', me._id, updated);
@@ -547,4 +560,4 @@ function createService({ store, now, randomId, hash }) {
     return actions[action](input || {}, identity);
   };
 }
-module.exports = { createService, ClubError, safeMember, safeClub, activeMembers };
+module.exports = { createService, ClubError, safeMember, safeClub, activeMembers, duplicateAccount, requireAvailableMemberName };

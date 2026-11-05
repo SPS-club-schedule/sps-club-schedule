@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import domain from '../shared/domain.js';
+import { username, requireAvailableUsername } from './usernames.mjs';
 import { createStore } from './store.mjs';
 import { createAdminService, bumpAccountRevision } from './admin.mjs';
 import { createAccountService } from './account.mjs';
@@ -27,10 +28,6 @@ function clientIp(request, env) {
     if (timingSafeEqual(Buffer.from(proof, 'hex'), Buffer.from(expected, 'hex'))) return ip;
   }
   return request.headers.get('CF-Connecting-IP') || 'local';
-}
-function username(value) {
-  if (typeof value !== 'string' || !/^[a-zA-Z0-9_]{3,30}$/.test(value)) fail('VALIDATION', '用户名须为3—30位英文字母、数字或下划线');
-  return value.toLowerCase();
 }
 function password(value) {
   if (typeof value !== 'string' || value.length < 10 || value.length > 128) fail('VALIDATION', '密码须为10—128个字符');
@@ -73,8 +70,8 @@ export class ClubService extends DurableObject {
     CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);`);
     this.mail = createMailService({sql:this.sql,store:this.store,env});
     this.run = createService({ store: this.store, now: Date.now, hash, randomId: () => randomBytes(16).toString('hex') });
-    this.admin = createAdminService({ store:this.store, sql:this.sql, hash, random, username, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'admin-password') });
-    this.account = createAccountService({ store:this.store, sql:this.sql, hash, random, username, password, passwordHash, mail:this.mail, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'account-password') });
+    this.admin = createAdminService({ store:this.store, sql:this.sql, hash, random, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'admin-password') });
+    this.account = createAccountService({ store:this.store, sql:this.sql, hash, random, password, passwordHash, mail:this.mail, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'account-password') });
   }
   verifyPassword(id, pass, limitPrefix) {
     const row = this.sql.exec('SELECT salt,password_hash FROM accounts WHERE id=?', id).toArray()[0];
@@ -116,11 +113,11 @@ export class ClubService extends DurableObject {
       let email;try{email=emailHelpers.normalizeEmail(data.email);}catch(error){fail('VALIDATION',error.message);}
       this.limit('email-target:'+hash(email.toLowerCase()),5,3600000);
       if (!['join', 'create'].includes(data.mode)) fail('VALIDATION', '请选择加入或创建社团');
-      if (this.sql.exec('SELECT id FROM accounts WHERE username=?', name).toArray().length) fail('CONFLICT', '这个用户名已被使用');
       const account = { id: random(), username: name }, salt = random(), recoveryCode = random();
-      const digest = passwordHash(pass, salt);
       // Account, membership, club and session commit or roll back together.
       return this.store.transaction(async () => {
+        requireAvailableUsername(this.sql, name);
+        const digest = passwordHash(pass, salt);
         this.sql.exec('INSERT INTO accounts(id,username,salt,password_hash,recovery_hash,created_at) VALUES(?,?,?,?,?,?)', account.id, name, salt, digest, hash(recoveryCode), Date.now());
         const result = await this.run(data.mode === 'create' ? 'createClub' : 'joinClub', {
           nickname: data.nickname, name: data.name, token: data.invite,

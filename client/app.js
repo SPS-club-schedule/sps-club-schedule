@@ -520,7 +520,7 @@ root.addEventListener('submit', event => {
       await api.call(s.id?'editTemplate':'createTemplate',{...taskFields(data),schedulingMode:data.schedulingMode || 'independent',durationMinutes:templateDurationValue(data),name:data.name,category:data.category,roles:(data.roles || []).map(role=>({id:role.id,name:role.name,coreMember:role.coreMember!==false})),steps:s.steps.map(step=>({...taskFields(step),...draftPlanningFields(step,data.schedulingMode==='backward'),id:step.id,dependsOn:step.dependsOn || [],...roleBindingFields(step),followMain:step.followMain === true,daysBefore:step.daysBefore})),clubId:s.editBoard.club.id,templateId:s.id,revision:s.revision,requestId:s.requestId});
       go('/templates'); toast('共享模板已保存');
     }
-    if (kind === 'name') { await api.call('renameMe', { clubId: s.sync.board.club.id, name: data.nickname }); s.form.nickname = undefined; toast('称呼已更新'); }
+    if (kind === 'name') { await api.call('renameMe', { clubId: s.sync.board.club.id, name: data.nickname }); s.form.nickname = undefined; toast('姓名已更新'); }
   });
 });
 root.addEventListener('click', event => {

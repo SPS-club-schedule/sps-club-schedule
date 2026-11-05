@@ -1,9 +1,10 @@
 import domain from '../shared/domain.js';
+import { username, requireAvailableUsername } from './usernames.mjs';
 import { accountRevision, bumpAccountRevision } from './admin.mjs';
 const { ClubError } = domain;
 const fail = (code, message) => { throw new ClubError(code, message); };
 
-export function createAccountService({ store, sql, username, password, passwordHash, verifyPassword, random, hash, mail }) {
+export function createAccountService({ store, sql, password, passwordHash, verifyPassword, random, hash, mail }) {
   const info = row => ({ username:row.username, createdAt:row.created_at, revision:accountRevision(sql,row.id),...mail.info(row.id) });
   return async function execute(action, input, actor) {
     return store.transaction(async () => {
@@ -27,7 +28,7 @@ export function createAccountService({ store, sql, username, password, passwordH
       if (action === 'accountChangeUsername') {
         const name = username(input.username);
         if (name === row.username) return { account:info(row) };
-        if (sql.exec('SELECT id FROM accounts WHERE username=? AND id<>?', name, row.id).toArray().length) fail('CONFLICT', '这个用户名已被使用');
+        requireAvailableUsername(sql, name);
         sql.exec('UPDATE accounts SET username=? WHERE id=?', name, row.id);
         bumpAccountRevision(sql,row.id);
         sql.exec('DELETE FROM account_resets WHERE account_id=?', row.id);

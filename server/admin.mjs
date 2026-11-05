@@ -1,17 +1,18 @@
 import permissions from '../shared/permissions.js';
 import domain from '../shared/domain.js';
+import { username, requireAvailableUsername } from './usernames.mjs';
 import departments from '../shared/departments.js';
 import { listArchives, restoreArchive } from './archive.mjs';
 const { validDepartment } = departments;
 const { ROLES, isAdmin, canEditMember, canDeleteMember, canEditProfile, canEditDepartment, canAssignRole, assignableRoles, canEditLogin, canViewAudit } = permissions;
-const { ClubError, safeMember, safeClub, activeMembers } = domain;
+const { ClubError, safeMember, safeClub, activeMembers, requireAvailableMemberName } = domain;
 const fail = (code, message) => { throw new ClubError(code, message); };
 export const accountRevision = (sql, id) => sql.exec('SELECT revision FROM account_versions WHERE account_id=?', id).toArray()[0]?.revision || 1;
 export function bumpAccountRevision(sql, id) {
   sql.exec('INSERT INTO account_versions VALUES(?,2) ON CONFLICT(account_id) DO UPDATE SET revision=revision+1', id);
 }
 
-export function createAdminService({ store, sql, hash, random, username, verifyPassword, now = Date.now }) {
+export function createAdminService({ store, sql, hash, random, verifyPassword, now = Date.now }) {
   // Add separate tables to keep the original account schema rollback-compatible.
   sql.exec(`CREATE TABLE IF NOT EXISTS account_versions (account_id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS account_resets (
@@ -103,7 +104,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
       audit(input.clubId, actor, target, 'reset', []);
       return { resetToken, expiresAt, username:account.username };
     }
-    if (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 20) fail('VALIDATION', '社团内称呼须为1—20个字');
+    if (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 20) fail('VALIDATION', '姓名须为1—20个字');
     const name = input.name.trim(), role = input.role;
     // An older client omitting this field must preserve the current assignment.
     const department = input.department === undefined ? target.department || '' : input.department;
@@ -113,7 +114,7 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
     if ((target.role === 'owner' && role !== 'owner') || (target.role !== 'owner' && role === 'owner')) fail('FORBIDDEN', '创建者身份不能在此修改');
     if (role !== target.role && !canAssignRole(safeMember(actor),safeMember(target),role)) fail('FORBIDDEN', '只能任免权限低于自己的管理员');
     if (role==='department_admin' && !department) fail('VALIDATION', '请为部门管理指定所属部门');
-    if (name!==target.name && !canEditProfile(safeMember(actor),safeMember(target))) fail('FORBIDDEN','网页维护管理不能修改他人的社团称呼');
+    if (name!==target.name && !canEditProfile(safeMember(actor),safeMember(target))) fail('FORBIDDEN','网页维护管理不能修改他人的姓名');
     if (department!==(target.department || '') && !canEditDepartment(safeMember(actor),safeMember(target))) fail('FORBIDDEN','仅总管理员或创始人可以调整所属部门');
     const login = input.username === undefined ? account?.username : username(input.username);
     const loginChanged = login !== account?.username;
@@ -121,9 +122,10 @@ export function createAdminService({ store, sql, hash, random, username, verifyP
       if (!canEditLogin(safeMember(actor),safeMember(target))) fail('FORBIDDEN','登录用户名由网页维护管理或本人修改');
       const restriction = await accountAccess(db, actor, target);
       if (!account || restriction) fail('FORBIDDEN', restriction || '此成员没有网页账号');
-      if (sql.exec('SELECT id FROM accounts WHERE username=? AND id<>?', login, target.identity).toArray().length) fail('CONFLICT', '这个用户名已被使用');
+      requireAvailableUsername(sql, login);
     }
     if (loginChanged || role !== target.role) verifyPassword(identity, input.adminPassword);
+    if (name !== target.name) await requireAvailableMemberName(db, input.clubId, name, target._id);
     const fields = [name !== target.name && 'name', role !== target.role && 'role', loginChanged && 'username', department !== (target.department || '') && 'department'].filter(Boolean);
     const club = await db.get('clubs', input.clubId), baseVersion = club.syncVersion || 0;
     if (!fields.length) return { baseVersion, version:baseVersion, club:safeClub(club), member:safeMember(target), adminMember:await entry(db,actor,target) };

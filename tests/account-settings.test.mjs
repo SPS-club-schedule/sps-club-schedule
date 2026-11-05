@@ -55,7 +55,9 @@ test('username changes validate passwords, uniqueness and stale revisions withou
   const f=await fixture('rename'), info=await read(f.member), input={revision:info.revision,currentPassword:password,username:'RENAMED_ACCOUNT'};
   for(const currentPassword of [undefined,'incorrect-password!']) assert.equal((await attempt('accountChangeUsername',{...input,currentPassword},f.member.token)).status,403);
   assert.equal((await attempt('accountChangeUsername',{...input,username:'bad name'},f.member.token)).status,400);
-  assert.equal((await attempt('accountChangeUsername',{...input,username:f.owner.user.username.toUpperCase()},f.member.token)).status,409);
+  const duplicate=await attempt('accountChangeUsername',{...input,username:f.owner.user.username.toUpperCase()},f.member.token);
+  assert.equal(duplicate.status,409);
+  assert.match(duplicate.message,/用户名.*可能已经注册过账号.*忘记密码.*联系社团管理员/);
   assert.deepEqual(await read(f.member),info);
   const target=await f.adminRow(f.member),reset=await api('adminResetPassword',f.adminInput(target),f.owner.token);
   const otherLogin=await post('/auth/login',{username:f.member.user.username,password}); assert.equal(otherLogin.status,200);

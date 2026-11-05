@@ -161,6 +161,40 @@ async function adminFixture(prefix,registerAccount=register) {
   return {creator,member,clubId,invite,list,row,input};
 }
 
+test('registration rejects duplicate logins and simultaneous same-club names without leaving a partial account', async () => {
+  const signup = (username, mode, extra) => register(username, mode, extra, '192.0.2.85');
+  const club = (await signup('unique_owner', 'create', {nickname:'林一'})).data;
+  const invites = await api('getInvite', {clubId:club.clubId}, club.token);
+  const general = invites.token;
+  const dept = invites.departments.find(d => d.id === 'academic').token;
+  const sameLogin = await signup('UNIQUE_OWNER', 'create', {nickname:'林二'});
+  assert.equal(sameLogin.status, 409);
+  assert.match(sameLogin.message, /用户名.*可能已经注册过账号.*忘记密码.*联系社团管理员/);
+
+  const logins = ['unique_first', 'unique_second'];
+  const attempts = await Promise.all(logins.map((login, i) =>
+    signup(login, 'join', {invite:i ? dept : general, nickname:i ? ' Ｌｉｎ ' : 'lin'})));
+  assert.deepEqual(attempts.map(r => r.status).sort(), [200, 409]);
+  const loser = attempts.findIndex(r => r.status === 409);
+  assert.match(attempts[loser].message, /姓名.*可能已经注册过账号.*忘记密码.*联系社团管理员/);
+  const board = () => api('bootstrap', {clubId:club.clubId}, club.token);
+  assert.equal((await board()).members.length, 2);
+  const retried = await signup(logins[loser], 'join', {invite:general, nickname:'林二'});
+  assert.equal(retried.status, 200);
+  const member = retried.data;
+  const before = await board();
+  const rename = name => post('/api', {action:'renameMe',input:{clubId:club.clubId,name}}, member.token);
+  const collision = await rename(' 林一 ');
+  assert.equal(collision.status, 409);
+  assert.match(collision.message, /姓名.*联系社团管理员/);
+  assert.equal((await rename('林二')).status, 200);
+  assert.equal((await board()).version, before.version);
+
+  const otherClub = (await signup('unique_other', 'create', {nickname:'林一'})).data;
+  const otherJoin = await post('/api', {action:'joinClub',input:{token:general,nickname:'林一'}}, otherClub.token);
+  assert.equal(otherJoin.status, 409);
+});
+
 test('admin endpoints require a live same-club admin session and never expose password or recovery data',async()=>{
   const f=await adminFixture('access'),target=await f.row(f.member);
   for(const action of ['adminMembers','adminEditMember','adminResetPassword','getInvite']) {
@@ -181,6 +215,11 @@ test('admin edits update member sync and login usernames atomically, reject dupl
   const f=await adminFixture('edit'),target=await f.row(f.member),before=await api('bootstrap',{clubId:f.clubId},f.member.token);
   const collision=await post('/api',{action:'adminEditMember',input:{...f.input(target),name:'Must not persist',username:f.creator.user.username}},f.creator.token);
   assert.equal(collision.status,409);assert.equal((await f.row(f.member)).name,target.name);
+  assert.match(collision.message,/用户名.*联系社团管理员/);
+  const ownerName=(await f.row(f.creator)).name;
+  const sameName=await post('/api',{action:'adminEditMember',input:{...f.input(target),name:ownerName,username:'unused_rename'}},f.creator.token);
+  assert.equal(sameName.status,409);assert.match(sameName.message,/姓名.*联系社团管理员/);
+  assert.deepEqual(await f.row(f.member),target);
   const edited=await api('adminEditMember',{...f.input(target),name:'小林',username:'renamed_member'},f.creator.token);
   assert.equal(edited.member.name,'小林');assert.equal(edited.adminMember.accountRevision,target.accountRevision+1);
   assert.equal((await post('/auth/login',{username:f.member.user.username,password})).status,401);
