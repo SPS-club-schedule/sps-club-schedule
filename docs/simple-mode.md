@@ -1,5 +1,7 @@
 # 极简日程与 Android 极简版
 
+已于 2026-11-05 发布：[打开极简日程](https://sps-club-schedule.github.io/sps-club-schedule/?mode=simple#/simple) · [Android APK](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Simple-1.0.0.apk) · [微信分享 ZIP](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Simple-1.0.0.zip)。
+
 极简模式与完整模式共用账号、社团和任务数据。完整页面导航的「极简模式」进入 `#/simple`，右上角「完整模式」切回。浏览器按账号记住本机模式；Android 极简版默认进入极简模式，用户仍可切换。
 
 ## 使用
@@ -42,4 +44,4 @@ cd android
 
 发布构建仍通过仓库外的 `SPS_ANDROID_SIGNING_PROPERTIES` 指定原有签名配置。未设置时 APK 未签名，不能分发安装。此次签名成品位于 `android/releases/SPS-Simple-1.0.0.apk`，发布文件位于 `public/downloads/`。登录页提供极简 APK 和兼容 Windows 解压的微信分享 ZIP。
 
-App 加载正式网页，必须先部署本次 Worker 和前端，极简入口才可在 App 中使用。不提供离线编辑或后台推送。首轮真机仍需确认长按拖拽、双指缩放和各厂商 WebView 的滚动手感。
+App 加载正式网页，本次 Worker 和前端均已部署，安装后可用已有账号进入。不提供离线编辑或后台推送。首轮真机仍需确认长按拖拽、双指缩放和各厂商 WebView 的滚动手感。
