@@ -17,7 +17,7 @@ if (!android && process.env.CI && !process.env.API_BASE_URL) throw new Error('Se
 if(android)await fs.rm(output,{recursive:true,force:true});
 await fs.rm(path.join(output,'assets'), {recursive:true,force:true});
 await fs.mkdir(path.join(output,'assets'), { recursive:true });
-const bundle=await build({ entryPoints:[path.join(root,'client/app.js')], outdir:path.join(output,'assets'), entryNames:'app-[hash]', chunkNames:'[name]-[hash]', splitting:true, format:'esm', bundle:true, minify:true, platform:'browser', target:'es2020',metafile:true,define:{__RELEASE_ID__:JSON.stringify(releaseId),__BUNDLED_APP__:String(android),__BUNDLED_CONFIG__:JSON.stringify(android?{apiBase:api.origin,bookingApiBase:bookingApi.origin}:null)} });
+const bundle=await build({ entryPoints:[path.join(root,'client/app.js')], outdir:path.join(output,'assets'), entryNames:'app-[hash]', chunkNames:'[name]-[hash]', splitting:true, format:'esm', bundle:true, minify:true, platform:'browser', target:'es2020',metafile:true,define:{__RELEASE_ID__:JSON.stringify(releaseId),__BUNDLED_APP__:String(android),__BUNDLED_CONFIG__:JSON.stringify({apiBase:api.origin,bookingApiBase:bookingApi.origin})} });
 const script='./assets/'+path.basename(Object.entries(bundle.metafile.outputs).find(([,value])=>value.entryPoint==='client/app.js'||value.entryPoint===path.join(root,'client/app.js'))[0]);
 const css = await Promise.all(['style.css','web.css','workspace.css','experience.css','simple.css'].map(name=>fs.readFile(path.join(root,'client',name),'utf8')));
 const mathCss=await fs.readFile(path.join(root,'node_modules/katex/dist/katex.min.css'),'utf8');
@@ -28,6 +28,18 @@ await fs.writeFile(path.join(output,style),styles);
 const csp = `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ${api.origin} ${bookingApi.origin}; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'`;
 let html=(await fs.readFile(path.join(root,'client/index.html'),'utf8')).replace('__CSP__',csp);
 if(android)html=html.replace('</head>',`<link rel="stylesheet" href="${style}">\n</head>`).replace('<script type="module" src="./bootstrap.js"></script>',`<script type="module" src="${script}"></script>`);
+else {
+  // Discover the initial module graph during HTML parsing; lazy renderers stay lazy.
+  const preloads=new Set();
+  function preload(name){
+    if(preloads.has(name))return;preloads.add(name);
+    for(const dependency of bundle.metafile.outputs[name].imports){
+      if(!dependency.external&&dependency.kind==='import-statement')preload(dependency.path);
+    }
+  }
+  preload(Object.keys(bundle.metafile.outputs).find(name=>path.basename(name)===path.basename(script)));
+  html=html.replace('</head>',`<meta name="sps-release" content="${releaseId}" data-script="${script}" data-style="${style}">\n<link rel="stylesheet" href="${style}" data-sps-style>\n${[...preloads].map(name=>`<link rel="modulepreload" href="./assets/${path.basename(name)}">`).join('\n')}\n</head>`);
+}
 await fs.writeFile(path.join(output,'index.html'),html);
 if(!android){
 await fs.cp(path.join(root,'public/downloads'),path.join(output,'downloads'),{recursive:true});

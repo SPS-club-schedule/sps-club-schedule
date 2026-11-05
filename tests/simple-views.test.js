@@ -2,7 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {buildSync}=require('esbuild');
 const vm=require('node:vm');
-const {parseDeadline}=require('../shared/view');
+const {parseDeadline,parts}=require('../shared/view');
 function fixture(role='owner',bundled=false){
   const session=role==='guest'?null:{token:'a'.repeat(64),user:{id:'me',username:'view_test'},expiresAt:Date.now()+3600000};
   const routes=[];
@@ -19,8 +19,9 @@ test('simple calendar renders completed records without state/priority/hierarchy
   assert.match(html,/预约教室/);assert.match(html,/&lt;script&gt;/);assert.doesNotMatch(html,/<script>|已完成|未完成|已逾期|优先|data-action="toggle"|主任务|子任务/);
 });
 test('new button respects selected date and form has only headings, times and assignees',()=>{
-  const {simple,s}=fixture();simple.action('simpleNew');const html=simple.view(s);
-  assert.match(html,/value="2026-11-06T09:00"/);assert.match(html,/value="2026-11-06T10:00"/);
+  const {simple,s}=fixture(),date=parts(Date.now()+86400000).date;
+  simple.input({type:'change',target:{name:'simpleDate',value:date}});simple.action('simpleNew');const html=simple.view(s);
+  assert.match(html,new RegExp('value="'+date+'T09:00"'));assert.match(html,new RegExp('value="'+date+'T10:00"'));
   for(const name of ['simpleMajor','simpleMinor','simpleStart','simpleEnd','simplePerson'])assert.match(html,new RegExp('name="'+name+'"'));
   assert.doesNotMatch(html,/name="priority"|name="description"|data-action="addStep"/);
 });
