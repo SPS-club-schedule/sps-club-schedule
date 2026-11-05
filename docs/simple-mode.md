@@ -1,6 +1,6 @@
 # 极简日程与统一 Android App
 
-已于 2026-11-05 发布：[打开极简日程](https://sps-club-schedule.github.io/sps-club-schedule/?mode=simple#/simple) · [Android APK](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Schedule-1.5.0.apk) · [微信分享 ZIP](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Schedule-1.5.0.zip)。
+已于 2026-11-05 发布：[打开极简日程](https://sps-club-schedule.github.io/sps-club-schedule/?mode=simple#/simple) · [Android APK](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Schedule-1.6.0.apk) · [微信分享 ZIP](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Schedule-1.6.0.zip)。
 
 极简模式与完整模式共用账号、社团和任务数据。浏览器中，完整页面导航的「极简模式」进入 `#/simple`，右上角「完整模式」切回；App 使用顶部原生模式按钮。网站和 App 首次默认极简模式，按设备记住之后选择的模式；退出登录或重新打开后继续使用该模式。
 
@@ -42,14 +42,14 @@
 
 沿用原 App 的 WebView 安全边界、加密会话、可选记住密码、文件选择及下载。模式选择只允许 `simple` / `full` 两个值，不改变权限；完整页面仍由网页和后端要求登录。尚未保存的编辑在通过原生按钮切换时会提示确认。
 
-原完整版 1.0–1.2 及统一版 1.3–1.4 可用相同签名覆盖安装 1.5.0，保留本机登录与模式选择。旧独立极简版 `org.spsclub.schedule.simple` 是不同包名，需安装统一版并重新登录；服务器账号与任务不用迁移，之后只需使用统一版。
+原完整版 1.0–1.2 及统一版 1.3–1.5 可用相同签名覆盖安装 1.6.0，保留本机登录与模式选择。旧独立极简版 `org.spsclub.schedule.simple` 是不同包名，需安装统一版并重新登录；服务器账号与任务不用迁移，之后只需使用统一版。
 
 ```sh
 cd android
 ./gradlew testDebugUnitTest lintRelease assembleRelease
 ```
 
-签名仍由仓库外的 `SPS_ANDROID_SIGNING_PROPERTIES` 配置提供。当前成品为 `public/downloads/SPS-Schedule-1.5.0.apk` 和 Windows 兼容的同名 ZIP。网站的游客日历及登录页均有统一 App 下载入口，旧下载 URL 仍保留。
+签名仍由仓库外的 `SPS_ANDROID_SIGNING_PROPERTIES` 配置提供。当前成品为 `public/downloads/SPS-Schedule-1.6.0.apk` 和 Windows 兼容的同名 ZIP。网站的游客日历及登录页均有统一 App 下载入口，旧下载 URL 仍保留。
 
 1.4.0 将页面、脚本、样式、字体和仓库档案内置在 APK 中，直接请求原有任务与预约后端。无需下载前端即可显示界面；自动登录在界面显示后进行，不阻塞游客日历。App 隐藏下载、分享包和网页的模式切换按钮，只保留顶部原生选择器。1.5.0 同时取消极简日程重复的标题栏，将登录和账号设置移到日历工具栏；网站保留原入口。
 

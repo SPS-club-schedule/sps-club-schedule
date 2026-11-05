@@ -32,3 +32,6 @@ body.member-guide-active [data-tour="task-people"],body.member-guide-active [dat
 
 body.member-guide-active .experience-list,body.member-guide-active [data-document-preview]{max-height:280px;overflow:auto;overscroll-behavior:contain}
 body.member-guide-active .document-source{min-height:180px;height:220px}
+/* Keep the actual teaching region in view; large groups scroll inside their spotlight. */
+body.member-guide-active [data-guide-target]:is([data-tour="task-people"],[data-tour="child-people"],[data-tour="template-people"],[data-tour="template-duration"],[data-tour="duration-range"],[data-tour="child-deadline"],.role-card,.planning-preview,.experience-list,[data-document-preview]){max-height:min(250px,35dvh);overflow:auto;overscroll-behavior:contain}
+body.member-guide-active .document-source{min-height:100px;height:min(220px,28dvh)}

@@ -12,9 +12,11 @@
     "worker:dev": "wrangler dev --ip 127.0.0.1 --port 8787",
     "worker:deploy": "wrangler deploy",
     "gateway:deploy": "wrangler deploy --config wrangler.gateway.jsonc",
-    "test:gateway": "node --test tests/gateway.test.mjs"
+    "test:gateway": "node --test tests/gateway.test.mjs",
+    "test:guides": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "esbuild": "0.28.2",
     "miniflare": "5.20261023.2-beta",
     "wrangler": "4.155.0"

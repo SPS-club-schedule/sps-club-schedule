@@ -1,37 +1,11 @@
 import {tutorialKey,tutorialPreferences,canOfferTutorial,spotlightLayout} from '../shared/onboarding';
 import {documentKind} from '../shared/document-rules';
-import {resolveParticipants} from '../shared/assignments';
 import {departmentTutorialKey,canOfferDepartmentTutorial} from '../shared/department-tutorial';
 import {isAdmin} from '../shared/permissions';
 import {departmentSteps} from './department-tutorial';
 
-// Member practice uses the user’s draft; the department guide uses local examples.
-// Neither guide submits a form or creates server-side tasks/templates.
-const memberSteps=[
-  {id:'todos',page:'mine',target:'[data-tour="my-todos"]',title:'先处理分配给自己的待办',text:'进入社团后默认来到这里。点击条目右侧的小方框即可完成，点击任务主体查看详情；已完成的事项可在「已完成」中找到。任务看板集中展示社团概况和日历。',next:'再看社团安排'},
-  {id:'calendar',page:'board',target:'[data-tour="calendar-open"]',title:'先看安排，再发起任务',text:'这是月历入口：按日期看活动和截止事项。点击高亮的「展开日历」，试试日 / 周视图。全程可跳过，以后从「新手指南」重开。',action:'a[href="#/calendar"]'},
-  {id:'planner',page:'calendar',target:'.planner-toolbar',title:'在真实日历中切换日 / 周',text:'试着点「日」或「周」，切换日期或截止范围。活动是时间块，DDL 是截止事项；所有时间均为北京时间。',next:'看看日历导出'},
-  {id:'export',page:'calendar',target:'.planner-foot',title:'预约日历与个人日历',text:'「预约总览」打开 club-booking，预约活动也会出现在本站（不含课程）。.ics 导出自己的活动与待办，是当前快照，变化后需重新导出。',next:'认识经验档案'},
-  {id:'experience-entry',page:'board',target:'a[href="#/experience"]',title:'经验档案：把经验留给下一届',text:'点击高亮的「经验档案」。这里保存交接资料、活动复盘和学习材料，公开可读，成员共同整理。',action:'a[href="#/experience"]'},
-  {id:'experience-search',page:'experience',target:'.experience-search-row input',title:'先找到你需要的经验',text:'在这里搜索文件名、路径或说明，搜索范围包括所有文件夹。清空搜索可以重新浏览目录。',next:'浏览资料'},
-  {id:'experience-list',page:'experience',target:'.experience-list',title:'打开文件夹，在线阅读文档',text:'点击文件夹进入目录；Markdown、LaTeX 和文本资料可点「在线阅读」，其他附件可以下载。你也可以用下方按钮打开一份现有文档。',next:'打开一份文档',action:'.experience-list a[href*="document="]'},
-  {id:'experience-read',page:'experience',target:'[data-document-preview]',title:'直接在线阅读',text:'这里会渲染 Markdown 的标题、表格和公式。LaTeX 文档用于公式预览；需要完整源文件时，可以下载源码。',next:'看看贡献入口'},
-  {id:'experience-contribute',page:'experience',target:'.experience-search-row',title:'上传、整理或新建经验',text:'SPS 成员可以上传资料、新建文件夹或在线新建文档。已上传文档有权限时可编辑正文；仓库文档可另存网页副本。点「新建文档」试用编辑器，或直接继续任务指南。',next:'去发起任务',action:'[data-action="experienceDocumentNew"]'},
-  {id:'experience-source',page:'experience',target:'.document-editor-grid > div',writeOnly:true,title:'试写 Markdown 与 LaTeX',text:'在真实编辑器里试写标题、列表或公式，例如 $E=mc^2$。这是未发布的新文档；修改后下一步查看渲染效果。',next:'查看实时预览'},
-  {id:'experience-preview',page:'experience',target:'[data-document-preview]',writeOnly:true,title:'实时查看排版与公式',text:'Markdown 和公式会随输入更新。用「上一步」回到源代码继续修改，再回来检查效果；当前内容仍是草稿。',next:'了解保存方式'},
-  {id:'experience-save',page:'experience',target:'.document-save-row',writeOnly:true,title:'选择格式、路径，再决定公开',text:'可选择 Markdown、LaTeX 公式或纯文本，并用路径指定目录。「保存并公开」才会发布。指南期间不会保存；继续后会暂存草稿，刷新或关闭页面前返回档案可恢复。',next:'去发起任务'},
-  {id:'create',page:'board',target:'[data-tour="create-task"]',title:'每位成员都能发起任务',text:'点击高亮的「＋ 发布任务」，打开实际编辑区。接下来填写的是未发布草稿，不会自动通知或分配给其他成员。',action:'a[href="#/edit"]'},
-  {id:'title',page:'edit',target:'[data-tour="task-title"]',title:'写清楚要做什么',text:'在这里填写任务名称，例如「周六研讨班」。用自己的真实安排练习；任务说明里还可以补充交付要求。',next:'认识 DDL',ready:s=>!!s.form.title?.trim()},
-  {id:'kind',page:'edit',target:'[data-tour="schedule-kind"]',title:'DDL 与持续时段有什么不同？',text:'「仅截止时间」表示最晚何时完成，如周五前交海报；「有持续时段」表示活动何时发生。点击「有持续时段」看看实际字段。',action:'[data-action="duration"][data-value="true"]'},
-  {id:'duration',page:'edit',target:'[data-tour="duration-range"]',title:'设置活动的开始与结束',text:'在高亮处设置活动时段，例如周六 19:00–21:00。地点可稍后选填；启用预约同步的社团会将这个时段同步到 club-booking。',next:'再看截止时间'},
-  {id:'deadline',page:'edit',target:'[data-tour="deadline"]',title:'时段任务也有独立的 DDL',text:'这里仍然是截止时间，默认跟随活动开始。你可以直接修改；修改后，再调整活动时段就不会覆盖这个 DDL。',next:'选择参与成员'},
-  {id:'people',page:'edit',target:'[data-tour="task-people"]',title:'确定这件事由谁完成',text:'点击姓名或部门调整参与名单。逐人完成需每个人打勾；协作完成由指定成员中任一人完成即可。名单以发布时为准。',next:'拆分子任务',ready:s=>resolveParticipants(s.form,s.editBoard?.members||[]).length>0},
-  {id:'add-child',page:'edit',target:'[data-action="addStep"]',title:'把准备工作拆开分配',text:'点击「＋ 添加一步」，实际添加一项子任务，例如海报、场地或讲义。每项工作都能有自己的负责人和截止时间。',action:'[data-action="addStep"]'},
-  {id:'child-title',page:'edit',target:'[data-tour="child-title"]',child:true,title:'为这项子任务命名',text:'填写具体工作，例如「制作海报」。子任务与主任务分别标记完成，全部子任务完成后也要单独确认主任务。',next:'设置子任务 DDL',ready:(s,i)=>!!s.steps[i]?.title?.trim()},
-  {id:'child-deadline',page:'edit',target:'[data-tour="child-deadline"]',child:true,title:'单独约定这一步的截止时间',text:'可以按主任务提前几天，也可以点「单独调整日期 / 时间」。这里设置的是 DDL，子任务没有活动时段；请确保截止时间仍在未来。',next:'分配子任务负责人'},
-  {id:'child-people',page:'edit',target:'[data-tour="child-people"]',child:true,title:'把这一步交给具体的人',text:'点姓名或部门，给子任务单独指定负责人；也可以跟随主任务名单。发布后，它会进入负责人的「我的待办」和截止日历。',next:'检查发布入口',ready:(s,i)=>!!s.steps[i]&&resolveParticipants(s.steps[i],s.editBoard?.members||[],s.form).length>0},
-  {id:'publish',page:'edit',target:'.editor-pane [form="task-form"], .footer [form="task-form"]',title:'确认后，再正式发布',text:'这是实际发布按钮。先完成指南，检查名称、时间与负责人，再决定是否发布。现在没有任何任务被提交；跳过或完成指南都会保留当前草稿。',next:'完成指南'}
-];
+import {memberSteps} from './member-tutorial';
+
 const focusable='a[href],button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]';
 
 export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()=>{},onDepartmentExit=()=>{}}) {
@@ -60,6 +34,7 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
     if(remember)preferences.dismiss(key,completed);
     const department=kind==='department',dismissedClub=clubId;
     index=-1;painted=-1;pendingPage='';target=null;overlay.hidden=true;releaseInert();
+    document.querySelectorAll('[data-guide-target]').forEach(el=>el.removeAttribute('data-guide-target'));
     document.body.classList.remove('member-guide-active');
     const focus=returnFocus?.isConnected?returnFocus:document.querySelector('[data-action="tutorial"]');
     focus?.focus({preventScroll:true});
@@ -67,33 +42,49 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
   }
   function findTarget() {
     const step=steps[index];
-    if(kind==='department'&&step.childIndex!==undefined){
-      const panel=document.querySelector(`[data-step-panel="${step.childIndex}"]`);
-      if(panel){panel.open=true;state.openSteps?.add(step.childIndex);}
+    const panelIndex=step.childIndex??(step.child?childIndex:undefined);
+    if(panelIndex!==undefined){
+      const panel=document.querySelector(`[data-step-panel="${panelIndex}"]`);
+      if(panel){panel.open=true;state.openSteps?.add(panelIndex);}
     }
     const scope=step.childIndex!==undefined?document.querySelector(`[data-step-panel="${step.childIndex}"]`):step.child?document.querySelector(`[data-step-panel="${childIndex}"]`):document;
-    const selector=step.id==='experience-contribute'&&state.experience?.canWrite?'[data-action="experienceDocumentNew"]':step.target;
-    return [...scope?.querySelectorAll(selector)||[]].find(el=>el.getClientRects().length) || (kind==='department'&&state.editBoard?document.querySelector('.editor-pane .page'):null);
+    const visible=selector=>[...scope?.querySelectorAll(selector)||[]].find(el=>el.getClientRects().length);
+    const element=visible(step.target);
+    if(element)return {element,content:step};
+    const fallback=step.fallback&&visible(step.fallback.target);
+    return {element:fallback||null,content:fallback?{...step,...step.fallback}:step,fallback:!!fallback};
   }
   function position() {
-    if(!active()||!target?.isConnected)return;
+    if(!active())return;
     const view=window.visualViewport;
     const viewport={width:view?.width||innerWidth,height:view?.height||innerHeight,left:view?.offsetLeft||0,top:view?.offsetTop||0};
-    const layout=spotlightLayout(target.getBoundingClientRect(),viewport,{width:card.offsetWidth,height:card.offsetHeight});
+    if(!target?.isConnected){
+      outline.hidden=true;shades.forEach((el,i)=>Object.assign(el.style,{left:viewport.left+'px',top:viewport.top+'px',width:i?'0':viewport.width+'px',height:i?'0':viewport.height+'px'}));
+      Object.assign(card.style,{left:viewport.left+12+'px',top:viewport.top+12+'px',maxHeight:viewport.height-24+'px'});return;
+    }
+    outline.hidden=false;
+    const rect=target.getBoundingClientRect(),gap=36;
+    card.style.maxHeight=Math.max(120,viewport.height-24)+'px';
+    // A phone keyboard leaves less vertical room. Scroll the coach instead of
+    // shrinking the spotlight away from the input it is explaining.
+    if(viewport.left+viewport.width-rect.right<card.offsetWidth+gap&&rect.left-viewport.left<card.offsetWidth+gap){
+      const space=Math.max(rect.top-viewport.top-gap,viewport.top+viewport.height-rect.bottom-gap);
+      if(space>=100)card.style.maxHeight=Math.min(viewport.height-24,space)+'px';
+    }
+    const layout=spotlightLayout(rect,viewport,{width:card.offsetWidth,height:card.offsetHeight});
     const box=(el,r)=>Object.assign(el.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
     box(outline,layout.hole);layout.shades.forEach((r,i)=>box(shades[i],r));
     card.style.left=layout.card.left+'px';card.style.top=layout.card.top+'px';
-    card.style.maxHeight=Math.max(120,viewport.height-24)+'px';
   }
   function schedulePosition() {if(!active())return;cancelAnimationFrame(frame);frame=requestAnimationFrame(position);}
-  function paint() {
+  function paint(focusCoach=true) {
     const step=steps[index],resume=!!(step.id==='kind'&&state.form.hasDuration||step.id==='add-child'&&state.steps?.[childIndex]);
-    const paintKey=index+':'+resume,changed=painted!==paintKey;
-    const found=findTarget();
-    if(!found) {target=null;releaseInert();overlay.hidden=true;return;}
+    const {element:found,content,fallback}=findTarget();
+    const paintKey=index+':'+resume+':'+fallback+':'+!!found,changed=painted!==paintKey;
+    overlay.dataset.guideStep=step.id;overlay.dataset.guideMissing=String(!found);
     if(changed) {
       painted=paintKey;
-      card.innerHTML=`<div class="guide-top"><span class="eyebrow">${kind==='department'?'模板设置教程':'操作指南'} · ${index+1} / ${steps.length}</span><button type="button" class="plain small" data-guide="skip">跳过</button></div><h2 tabindex="-1">${step.title}</h2><p>${step.text}</p><div class="guide-actions"><button type="button" class="secondary" data-guide="previous" ${cursor===0?'disabled':''}>上一步</button>${step.next?`<button type="button" class="primary" data-guide="next">${step.next}</button>`:'<span class="guide-prompt">↖ 请操作高亮区域，完成后自动继续</span>'}</div>`;
+      card.innerHTML=`<div class="guide-top"><span class="eyebrow">${kind==='department'?'管理员指南':'操作指南'} · ${index+1} / ${steps.length}</span><button type="button" class="plain small" data-guide="skip">跳过</button></div><h2 tabindex="-1">${content.title}</h2><p>${found?content.text:'当前页面还没有可用的操作控件。可以等待加载后重新定位，或返回上一步、跳过指南。'}</p><div class="guide-actions"><button type="button" class="secondary" data-guide="previous" ${cursor===0?'disabled':''}>上一步</button>${!found?'<button type="button" class="primary" data-guide="retry">重新定位</button>':step.next?`<button type="button" class="primary" data-guide="next">${step.next}</button>`:'<span class="guide-prompt">请操作高亮控件，完成后自动继续</span>'}</div>`;
     }
     if(!step.next&&resume) {
       card.querySelector('.guide-prompt')?.remove();
@@ -101,29 +92,31 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
       if(!card.querySelector('[data-guide="next"]'))card.querySelector('.guide-actions').insertAdjacentHTML('beforeend','<button type="button" class="primary" data-guide="next">继续已填写内容</button>');
     }
     const next=card.querySelector('[data-guide="next"]');
-    if(next&&step.id==='experience-contribute')next.textContent=hasDocumentDraft()?'继续文档草稿':'去发起任务';
+    if(next&&step.id==='experience-contribute')next.textContent=canWrite&&hasDocumentDraft()?'继续文档草稿':'完成指南';
     if(next)next.disabled=!!state.busy||(step.page==='experience'&&!state.experience)||!!step.ready&&!step.ready(state,childIndex);
     card.querySelector('[data-guide="previous"]').disabled=cursor===0||!!state.busy;
-    target=found;overlay.hidden=false;isolate(target);
-    if(kind==='department'&&!step.interactive&&!target.inert){target.inert=true;inerted.push(target);}
+    document.querySelectorAll('[data-guide-target]').forEach(el=>el.removeAttribute('data-guide-target'));
+    target=found;target?.setAttribute('data-guide-target',step.id);overlay.hidden=false;isolate(target);
+    if(target&&step.interactive===false&&!target.inert){target.inert=true;inerted.push(target);}
     if(changed) {
-      target.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
-      card.querySelector('h2').focus({preventScroll:true});
+      target?.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});
+      if(focusCoach)card.querySelector('h2').focus({preventScroll:true});
     }
     position();schedulePosition();
   }
   function moveTo(nextIndex) {
     index=nextIndex;painted=-1;
     const step=steps[index];
-    const directory=['experience-search','experience-list','experience-contribute'].includes(step.id);
-    const needsDoc=['experience-read','experience-source','experience-preview','experience-save'].includes(step.id);
+    const directory=['experience-search','experience-list','experience-upload','experience-folder','experience-contribute'].includes(step.id);
+    const reading=['experience-read','experience-edit-entry'].includes(step.id);
+    const needsDoc=reading||['experience-source','experience-preview','experience-format','experience-path','experience-save'].includes(step.id);
     const page=step.page;
     pendingPage=page;
     if(page!==state.page) {
-      navigate(kind==='department'?'/'+page+(['edit','template-edit'].includes(page)?'?guide=department':''):page==='experience'&&step.id==='experience-read'?(readUrl||'/experience'):'/'+page,{restoreDocument:!!step.writeOnly});return;
+      navigate(page==='experience'&&reading?(readUrl||'/experience'):'/'+page+(kind==='department'&&['edit','template-edit'].includes(page)?'?guide=department':''),{restoreDocument:!!step.writeOnly});return;
     }
     if(directory&&state.experienceDocument){navigate('/experience');return;}
-    if(needsDoc&&!state.experienceDocument){navigate(step.id==='experience-read'?(readUrl||'/experience'):'/experience',{restoreDocument:!!step.writeOnly});return;}
+    if(needsDoc&&!state.experienceDocument){navigate(reading?(readUrl||'/experience'):'/experience',{restoreDocument:!!step.writeOnly});return;}
     pendingPage='';paint();
   }
   function advance(fromAction=false) {
@@ -138,10 +131,10 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
       if(item)readUrl='/experience?document='+encodeURIComponent(item.id);
       else nextIndex=stepIndex('experience-contribute');
     }
-    if(step.id==='experience-contribute'&&!fromAction&&!hasDocumentDraft())nextIndex=stepIndex('create');
-    if(steps[nextIndex]?.writeOnly&&!canWrite)nextIndex=stepIndex('create');
+    if(step.id==='experience-contribute'&&!fromAction&&(!canWrite||!hasDocumentDraft())){stop(true);return;}
+    if(steps[nextIndex]?.writeOnly&&!canWrite)nextIndex=stepIndex('experience-contribute');
     history=history.slice(0,cursor+1);history.push(nextIndex);cursor++;
-    if(fromAction&&['calendar','create','experience-entry','experience-list'].includes(step.id)){
+    if(fromAction&&['create','experience-entry','experience-list'].includes(step.id)){
       index=nextIndex;painted=-1;pendingPage=steps[index].page;target=null;overlay.hidden=true;releaseInert();return;
     }
     moveTo(nextIndex);
@@ -153,19 +146,20 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
     if(requestedKind==='department'&&!isAdmin((s.sync?.board||s.editBoard)?.me?.role))return;
     if(requestedKind==='member'&&s.guidePractice)return;
     kind=requestedKind;steps=kind==='department'?departmentSteps:memberSteps;clubId=club?.id;startedAccount=accountId;
-    card.setAttribute('aria-label',kind==='department'?'模板设置教程':'新手操作指南');
+    card.setAttribute('aria-label',kind==='department'?'管理员指南':'新手操作指南');
     key=guideKey(accountId,clubId);
     if(!key)return;
-    index=kind==='department'?0:s.page==='mine'?stepIndex('todos'):s.page==='board'?stepIndex('calendar'):s.page==='calendar'?stepIndex('planner'):s.page==='experience'&&!s.experienceDocument?stepIndex('experience-search'):s.page==='edit'&&!s.id&&!s.parentId?stepIndex('title'):-1;
+    index=kind==='department'?0:['mine','board','calendar'].includes(s.page)?stepIndex('todos'):s.page==='experience'&&!s.experienceDocument?stepIndex('experience-search'):s.page==='edit'&&!s.id&&!s.parentId?stepIndex('title'):-1;
     if(!active())return;
     returnFocus=document.activeElement;painted=-1;pendingPage='';history=[index];cursor=0;childIndex=(s.steps?.length||0)-1;readUrl='';canWrite=!!s.experience?.canWrite;
     document.body.classList.add('member-guide-active');
-    if(kind==='department')moveTo(0);else paint();
+    if(kind==='department'||steps[index].page!==s.page)moveTo(index);else paint();
   }
   overlay.addEventListener('click',event=>{
     const action=event.target.closest('[data-guide]')?.dataset.guide;
     if(action==='skip')stop();
     if(action==='next')advance();
+    if(action==='retry'){painted=-1;paint();}
     if(action==='previous'&&cursor>0&&!state.busy){cursor--;moveTo(history[cursor]);}
   });
   document.addEventListener('click',event=>{
@@ -178,7 +172,6 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
   document.addEventListener('click',event=>{
     if(!active()||overlay.contains(event.target))return;
     const step=steps[index];
-    if(step.id==='publish'&&target?.contains(event.target)){stop(true);return;}
     if(step.action&&event.target.closest(step.action)) {
       if(step.id==='experience-list')readUrl=event.target.closest('a').getAttribute('href').slice(1);
       // New-document initialization awaits the renderer, then update() advances.
@@ -201,13 +194,13 @@ export function createTutorial({navigate,hasDocumentDraft,onDepartmentDismiss=()
       event.preventDefault();elements[next].focus();
     }
   },true);
-  let viewportWidth=innerWidth;
   window.addEventListener('resize',()=>{
-    if(innerWidth!==viewportWidth){viewportWidth=innerWidth;if(active()){painted=-1;paint();}}
-    else schedulePosition();
+    if(active()){painted=-1;paint(false);}
   });
   document.addEventListener('scroll',schedulePosition,true);
-  window.visualViewport?.addEventListener('resize',schedulePosition);
+  window.visualViewport?.addEventListener('resize',()=>{
+    if(active()){target?.scrollIntoView({block:'center',inline:'nearest',behavior:'instant'});schedulePosition();}
+  });
   window.visualViewport?.addEventListener('scroll',schedulePosition);
   return {open,get active(){return active();},update(s,accountId) {
     state=s;account=accountId;

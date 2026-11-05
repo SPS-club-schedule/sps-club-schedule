@@ -9,3 +9,7 @@ dist/
 .DS_Store
 qa/*.jpg
 qa/*.png
+
+.guide-test-web/
+test-results/
+playwright-report/

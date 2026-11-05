@@ -21,6 +21,8 @@ jobs:
       - run: npm test
       - run: npm run test:worker
       - run: npm run test:gateway
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:guides
       - run: npm run build
         env:
           API_BASE_URL: ${{ vars.API_BASE_URL }}
