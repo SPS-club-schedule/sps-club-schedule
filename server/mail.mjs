@@ -6,6 +6,7 @@ import departments from '../shared/departments.js';
 import view from '../shared/view.js';
 const {ClubError}=domain, {normalizeEmail}=emailHelpers, {participantKeys}=guestHelpers;
 const DAY=86400000, CODE_LIFE=15*60000;
+const ASSIGNMENT_WINDOW = 60_000;
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const fail=(code,message)=>{throw new ClubError(code,message);};
 export const taskDone=t=>!!t && (t.mode==='shared'?!!t.sharedCompletion:participantKeys(t).length>0 && participantKeys(t).every(id=>!!t.completions?.[id]));
@@ -36,9 +37,9 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
   const emailRow=id=>sql.exec('SELECT * FROM account_emails WHERE account_id=?',id).toArray()[0];
   const info=id=>{const r=emailRow(id);return {email:r?.email||'',emailVerified:!!r?.verified_at,emailVerificationExpiresAt:r?.code_expires_at||0};};
   const publicUser=row=>({id:row.id,username:row.username,...info(row.id)});
-  function enqueue(key,kind,accountId,taskId,context,expires,priority) {
-    sql.exec('INSERT OR IGNORE INTO email_outbox(id,kind,account_id,task_id,context,created_at,expires_at,priority) VALUES(?,?,?,?,?,?,?,?)',
-      hash(key),kind,accountId,taskId||null,JSON.stringify(context),now(),expires,priority);
+  function enqueue(key,kind,accountId,taskId,context,expires,priority,readyAt=0) {
+    sql.exec('INSERT OR IGNORE INTO email_outbox(id,kind,account_id,task_id,context,created_at,expires_at,priority,next_attempt) VALUES(?,?,?,?,?,?,?,?,?)',
+      hash(key),kind,accountId,taskId||null,JSON.stringify(context),now(),expires,priority,readyAt);
   }
   function requestVerification(id,value) {
     let email;try{email=normalizeEmail(value);}catch(error){fail('VALIDATION',error.message);}
@@ -59,20 +60,77 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     sql.exec("UPDATE email_outbox SET state='cancelled',payload=NULL,context='{}' WHERE account_id=? AND kind='verify' AND state='queued'",id);
     return info(id);
   }
-  async function changed(before,result,action) {
-    if(result.baseVersion===undefined||result.baseVersion===result.version)return;
-    const tasks=result.tasks|| (result.task?[result.task]:[]);
-    for(const task of tasks) {
-      if(!active(task))continue;
-      const prior=before?._id===task._id?before:null;
-      if(['createTask','createTaskGroup','editTask'].includes(action)) {
-        const members=await store.find('members',{clubId:task.clubId});
-        for(const id of task.participantIds||[]) {
-          if(prior?.participantIds.includes(id))continue;
-          const member=members.find(m=>m._id===id&&!m.archived);
-          if(member)enqueue(`assigned:${task._id}:${task.syncVersion}:${id}`,'assigned',member.identity,task._id,{memberId:id},now()+7*DAY,3);
+  // Only unsent mail can absorb more items. A provider retry must keep its original payload and key.
+  function queueAssignmentList(rootId, member, taskIds, version) {
+    const time = now();
+    const pending = sql.exec(
+      `SELECT id, context FROM email_outbox WHERE kind='assignment_list' AND account_id=?
+       AND task_id=? AND state='queued' AND first_attempt=0 AND created_at>? ORDER BY created_at DESC LIMIT 1`,
+      member.identity, rootId, time - ASSIGNMENT_WINDOW
+    ).toArray()[0];
+    if (pending) {
+      const context = JSON.parse(pending.context);
+      context.taskIds = [...new Set([...context.taskIds, ...taskIds])];
+      sql.exec('UPDATE email_outbox SET context=? WHERE id=?', JSON.stringify(context), pending.id);
+      return;
+    }
+    enqueue(`assignment-list:${rootId}:${version}:${member._id}`, 'assignment_list', member.identity, rootId,
+      {memberId: member._id, taskIds: [...taskIds]}, time + 7 * DAY, 3, time + ASSIGNMENT_WINDOW);
+  }
+
+  function withdrawAssignment(rootId, taskId, accountId) {
+    // Discard an earlier addition even if the person later puts themselves back on this subtask.
+    const jobs = sql.exec(
+      `SELECT id, kind, context FROM email_outbox WHERE account_id=? AND state='queued' AND first_attempt=0
+       AND ((kind='assignment_list' AND task_id=?) OR (kind='assigned' AND task_id=?))`,
+      accountId, rootId, taskId
+    ).toArray();
+    for (const job of jobs) {
+      const context = JSON.parse(job.context);
+      if (job.kind === 'assignment_list') {
+        if (!context.taskIds.includes(taskId)) continue;
+        context.taskIds = context.taskIds.filter(id => id !== taskId);
+        if (context.taskIds.length) {
+          sql.exec('UPDATE email_outbox SET context=? WHERE id=?', JSON.stringify(context), job.id);
+          continue;
         }
       }
+      sql.exec("UPDATE email_outbox SET state='cancelled',context='{}' WHERE id=?", job.id);
+    }
+  }
+
+  async function recordAssignments(tasks, before, actorId, version) {
+    // The domain returns either one updated task or one newly published family, root first.
+    const first = tasks[0];
+    const rootId = first.parentTaskId || first._id;
+    const roster = await store.find('members', {clubId: first.clubId});
+    const members = new Map(roster.filter(active).map(member => [member._id, member]));
+    const byRecipient = new Map();
+    for (const task of tasks) {
+      const previousIds = before?._id === task._id ? before.participantIds : [];
+      const currentIds = new Set(task.participantIds);
+      for (const id of previousIds) {
+        if (!currentIds.has(id) && members.has(id)) withdrawAssignment(rootId, task._id, members.get(id).identity);
+      }
+      for (const id of currentIds) {
+        const member = members.get(id);
+        if (!member || member.identity === actorId || previousIds.includes(id)) continue;
+        if (!byRecipient.has(member)) byRecipient.set(member, new Set());
+        byRecipient.get(member).add(task._id);
+      }
+    }
+    for (const [member, ids] of byRecipient) queueAssignmentList(rootId, member, ids, version);
+  }
+
+  async function changed(before, result, action, actorId) {
+    if(result.baseVersion===undefined||result.baseVersion===result.version)return;
+    const tasks = (result.tasks || (result.task ? [result.task] : [])).filter(active);
+    if (tasks.length && ['createTask', 'createTaskGroup', 'editTask'].includes(action)) {
+      await recordAssignments(tasks, before, actorId, result.version);
+      return;
+    }
+    for(const task of tasks) {
+      const prior=before?._id===task._id?before:null;
       if(action==='complete' && !taskDone(prior)&&taskDone(task)) {
         const [children,members]=await Promise.all([store.find('tasks',{clubId:task.clubId}),store.find('members',{clubId:task.clubId})]);
         for(const child of children.filter(t=>active(t)&&t.dependsOnTaskIds?.includes(task._id))) {
@@ -99,10 +157,35 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     }
   }
   const site=()=>env.EMAIL_SITE_URL||'https://sps-club-schedule.github.io/sps-club-schedule/';
-  function message(to,subject,lines,link) {
+  function message(to, subject, lines, destination) {
+    const links = typeof destination === 'string' ? [{label:'打开 SPS 社团日程', url:destination}] : destination;
+    const textLinks = links.map(link => typeof destination === 'string' ? link.url : link.label + '\n' + link.url);
+    const htmlLinks = links.map(link => '<p><a href="' + escape(link.url) + '">' + escape(link.label) + '</a></p>');
     return {from:env.EMAIL_FROM||'SPS 社团日程 <notifications@sps-schedule.folderrewind.top>',to:[to],subject,
-      text:[...lines,'',link,'','SPS 社团日程 · 这是一封任务服务邮件，请勿直接回复。'].join('\n'),
-      html:'<div lang="zh-CN" style="font-family:Arial,sans-serif;line-height:1.7;max-width:640px;margin:auto">'+lines.map(line=>'<p>'+escape(line)+'</p>').join('')+'<p><a href="'+escape(link)+'">打开 SPS 社团日程</a></p><p style="color:#666">SPS 社团日程 · 请勿直接回复</p></div>'};
+      text:[...lines,'',...textLinks,'','SPS 社团日程 · 这是一封任务服务邮件，请勿直接回复。'].join('\n'),
+      html:'<div lang="zh-CN" style="font-family:Arial,sans-serif;line-height:1.7;max-width:640px;margin:auto">'+lines.map(line=>'<p>'+escape(line)+'</p>').join('')+htmlLinks.join('')+'<p style="color:#666">SPS 社团日程 · 请勿直接回复</p></div>'};
+  }
+
+  async function assignmentMessage(root, member, context, email) {
+    if (context.memberId !== member._id) return null;
+    const links = [];
+    for (const id of context.taskIds) {
+      const item = id === root._id ? root : await store.get('tasks', id);
+      if (!memberPending(item, member._id) || item.clubId !== root.clubId) continue;
+      if (item._id !== root._id && item.parentTaskId !== root._id) continue;
+      const kind = item._id === root._id ? '主任务' : '子任务';
+      links.push({
+        label: `${kind}「${item.title}」 · ${date(item.dueAt)} 截止`,
+        url: site() + '#/task?id=' + encodeURIComponent(id) + '&club=' + encodeURIComponent(root.clubId)
+      });
+    }
+    if (!links.length) return null;
+    if (!email?.verified_at) return undefined;
+    const club = await store.get('clubs', root.clubId);
+    const showRoot = member.role !== 'speaker' || root.participantIds.includes(member._id);
+    const subject = '[SPS] 任务负责人分配 · ' + (showRoot ? root.title : club?.name || 'SPS');
+    return message(email.email, subject, [member.name + '，你好：', '社团：' + (club?.name || 'SPS'),
+      `你被安排负责以下 ${links.length} 项工作，可点击查看详情。`], links);
   }
   // Returns null for obsolete events, undefined for an email awaiting verification.
   async function materialize(job) {
@@ -118,6 +201,7 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     if(task.parentTaskId&&!active(parent))return null;
     const roster=(await store.find('members',{clubId:task.clubId})).filter(m=>!m.archived),me=roster.find(m=>m.identity===job.account_id);
     if(!me)return null;
+    if (job.kind === 'assignment_list') return assignmentMessage(task, me, c, email);
     const own=memberPending(task,me._id),pending=roster.filter(m=>memberPending(task,m._id));
     const club=await store.get('clubs',task.clubId),lines=[`${me.name}，你好：`,`社团：${club?.name||'SPS'}`,`任务：${task.title}`];
     if(parent)lines.push('所属主任务：'+parent.title);

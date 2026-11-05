@@ -38,13 +38,31 @@ test('Worker enforces email onboarding, privately verifies email, persists outbo
     const admin=await api('adminMembers',{clubId},owner.token);assert.ok(!JSON.stringify(admin.members).includes(member.user.email));
     assert.equal((await post('/internal/mail-tick',{},owner.token)).status,404);assert.equal((await attempt('accountVerifyEmail',{})).status,401);
     const ownerBoard=await api('bootstrap',{clubId},owner.token);
-    const task=await api('createTask',{clubId,requestId:'email-runtime-task',title:'邮件流程',mode:'individual',participantIds:[ownerBoard.me.id],dueAt:Date.now()+86400000,priority:'normal'},owner.token);
+    const memberAccount=(await api('accountSettings',{},member.token)).account;
+    await api('accountVerifyEmail',{revision:memberAccount.revision,code:code(member.user.email)},member.token);
+    const fields={mode:'individual',priority:'normal',daysBefore:0,participantIds:[]};
+    const input={...fields,clubId,requestId:'assignment-digest-group',title:'邮件流程',participantIds:[ownerBoard.me.id],dueAt:Date.now()+3*86400000,
+      roles:[{id:'poster',name:'海报负责人',participantIds:[board.me.id]},{id:'host',name:'主持人',participantIds:[board.me.id,ownerBoard.me.id]}],
+      subtasks:[{...fields,id:'poster-task',title:'制作海报',roleIds:['poster','host']},{...fields,id:'host-task',title:'活动主持',roleId:'host'}],
+      actorId:member.user.id};
+    const task=await api('createTaskGroup',input,owner.token);
+    await api('createTaskGroup',input,owner.token);
+    const storage=await db();
+    const jobs=await storage.exec("SELECT id,account_id,created_at,next_attempt FROM email_outbox WHERE kind IN ('assigned','assignment_list')");
+    assert.equal(jobs.length,1);
+    assert.equal(jobs[0].account_id,member.user.id);
+    assert.ok(Math.abs(jobs[0].next_attempt-jobs[0].created_at-60_000)<1000);
+    // Make the local digest eligible for the scheduled worker without sleeping for a minute.
+    await storage.exec('UPDATE email_outbox SET next_attempt=0 WHERE id=?',jobs[0].id);
+    await (await mf.getWorker()).scheduled({cron:'* * * * *',scheduledTime:Date.now()});
     await wait(()=>sent.some(x=>x.subject.includes('负责人')));
-    assert.ok(sent.find(x=>x.subject.includes('负责人')).text.includes('&club='+clubId));
-    await api('createTask',{clubId,requestId:'email-runtime-task',title:'邮件流程',mode:'individual',participantIds:[ownerBoard.me.id],dueAt:Date.now()+86400000,priority:'normal'},owner.token);
-    assert.equal(sent.filter(x=>x.subject.includes('负责人')).length,1);
-    // Backfill the deadline using the local-only SQL inspector, then exercise the real scheduled entrypoint.
-    const storage=await db(),past=Date.now()-1;
+    const assignments=sent.filter(x=>x.subject.includes('负责人'));
+    assert.equal(assignments.length,1);
+    assert.deepEqual(assignments[0].to,[member.user.email]);
+    assert.match(assignments[0].text,/以下 2 项/);
+    for(const child of task.tasks.slice(1))assert.ok(assignments[0].text.includes('#/task?id='+child._id+'&club='+clubId));
+    // A self-assigned root still receives its ordinary deadline reminder.
+    const past=Date.now()-1;
     await storage.exec("UPDATE records SET data=json_set(data,'$.dueAt',?) WHERE collection='tasks' AND id=?",past,task.taskId);
     await (await mf.getWorker()).scheduled({cron:'* * * * *',scheduledTime:Date.now()});
     await wait(()=>sent.some(x=>x.subject.includes('到期')));

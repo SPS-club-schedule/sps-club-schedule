@@ -20,7 +20,7 @@ async function fixture({daily=1000}={}) {
     mail.requestVerification(id,id+'@example.test');if(verified)mail.verify(id,'123456');return 'm_'+id;
   }
   async function task(id,extra={}) {const t={_id:id,clubId:'club',title:id,mode:'individual',participantIds:['m_alice'],dueAt:time+2*DAY,completions:{},syncVersion:1,...extra};await store.put('tasks',id,t);return t;}
-  async function assign(t,before=null,action='createTask'){await mail.changed(before,{baseVersion:0,version:t.syncVersion,task:t},action);}
+  async function assign(t,before=null,action='createTask',actor='dispatcher'){await mail.changed(before,{baseVersion:0,version:t.syncVersion,task:t},action,actor);}
   async function drain(){for(let i=0;i<200;i++){const job=await mail.prepare();if(!job)return;if(job.wait){time+=job.wait;continue;}mail.finish(job,await mail.transmit(job));}throw Error('queue did not drain');}
   await store.put('clubs','club',{name:'SPS'});
   return {db,sql,store,env,sent,person,task,assign,drain,rows,jobs,get mail(){return mail;},setTime:v=>{time=v;},advance:v=>{time+=v;},respond:fn=>{responder=fn;},restart:()=>{mail=make();}};
@@ -46,16 +46,70 @@ test('assignment notifications dedupe mutation retries, include every new assign
   const t=await f.task('work',{guestParticipants:[{id:'g1',name:'Guest'}]});await f.assign(t);await f.assign(t);
   assert.equal(f.jobs().length,1);
   await f.mail.changed(null,{baseVersion:1,version:1,task:t},'createTask');assert.equal(f.jobs().length,1);
-  const next=await f.task('work',{...t,participantIds:['m_bob'],syncVersion:2});await f.assign(next,t,'editTask');
+  const next=await f.task('work',{...t,participantIds:['m_bob'],syncVersion:2});await f.assign(next,t,'editTask');f.advance(60000);
   await f.drain();assert.equal(f.sent.length,1);assert.deepEqual(f.sent[0].body.to,['bob@example.test']);assert.equal(f.jobs().find(j=>j.account_id==='alice').state,'cancelled');
   const later={...next,title:'renamed',syncVersion:3};await f.assign(later,next,'editTask');assert.equal(f.jobs().length,2);
 });
 
-test('task group queues each main and child assignment atomically',async()=>{
-  const f=await fixture();await f.person('alice');const a=await f.task('main'),b=await f.task('child',{parentTaskId:'main'});
-  await f.mail.changed(null,{baseVersion:0,version:1,tasks:[a,b]},'createTaskGroup');assert.equal(f.jobs().length,2);
-  await assert.rejects(f.store.transaction(async()=>{await f.mail.changed(null,{baseVersion:0,version:2,task:{...a,_id:'rollback'}},'createTask');throw Error('rollback');}));
+test('one assignment digest per recipient and root includes only their current work', async()=>{
+  const f = await fixture();
+  for (const id of ['alice','bob','carol']) await f.person(id);
+  const root = await f.task('main', {participantIds:['m_alice','m_bob']});
+  const poster = await f.task('poster', {parentTaskId:'main',participantIds:['m_bob','m_carol']});
+  const speaker = await f.task('speaker', {parentTaskId:'main',participantIds:['m_alice','m_bob']});
+  const result = {baseVersion:0,version:1,tasks:[root,poster,speaker]};
+  await assert.rejects(f.store.transaction(async()=>{
+    await f.mail.changed(null,result,'createTaskGroup','alice');
+    throw Error('rollback');
+  }));
+  assert.equal(f.jobs().length,0);
+  await f.mail.changed(null,result,'createTaskGroup','alice');
+  await f.mail.changed(null,result,'createTaskGroup','alice');
   assert.equal(f.jobs().length,2);
+  f.advance(30_000);
+  const added = await f.task('minutes',{parentTaskId:'main',participantIds:['m_bob'],syncVersion:2});
+  await f.assign(added,null,'createTask','alice');
+  const other = await f.task('other',{participantIds:['m_bob'],syncVersion:3});
+  await f.assign(other,null,'createTask','alice');
+  await f.task('speaker',{...speaker,completions:{m_bob:START}});
+  f.restart();
+  f.advance(29_999);
+  await f.drain();
+  assert.equal(f.sent.length,0);
+  f.advance(1);
+  await f.drain();
+  assert.equal(f.sent.length,2);
+  const bob = f.sent.find(send=>send.body.to[0]==='bob@example.test').body;
+  for (const id of ['main','poster','minutes']) assert.ok(bob.text.includes('#/task?id='+id+'&club=club'));
+  assert.doesNotMatch(bob.text,/「speaker」|「other」/);
+  const carol = f.sent.find(send=>send.body.to[0]==='carol@example.test').body;
+  assert.match(carol.text,/以下 1 项/);
+  assert.match(carol.text,/子任务「poster」/);
+  f.advance(30_000);
+  await f.drain();
+  assert.equal(f.sent.length,3);
+  assert.match(f.sent[2].body.text,/主任务「other」/);
+  const later = await f.task('later',{parentTaskId:'main',participantIds:['m_bob'],syncVersion:4});
+  await f.assign(later,null,'createTask','alice');
+  f.advance(60_000);
+  await f.drain();
+  assert.equal(f.sent.length,4);
+  assert.match(f.sent[3].body.text,/以下 1 项/);
+  assert.match(f.sent[3].body.text,/子任务「later」/);
+});
+
+test('self reassignment by an editor drops any undelivered old addition for that subtask', async()=>{
+  const f=await fixture();
+  await f.person('alice');await f.person('bob');
+  await f.task('root');
+  const child=await f.task('child',{parentTaskId:'root',participantIds:['m_bob']});
+  await f.assign(child,null,'createTask','alice');
+  const moved=await f.task('child',{...child,participantIds:['m_alice'],syncVersion:2});
+  await f.assign(moved,child,'editTask','alice');
+  const back=await f.task('child',{...child,syncVersion:3});
+  await f.assign(back,moved,'editTask','bob');
+  f.advance(60_000);await f.drain();
+  assert.equal(f.sent.length,0);
 });
 
 test('deadline scan sends once at 24h and due time; department escalation stays in department and club',async()=>{
@@ -93,7 +147,7 @@ test('dependency needs full completion, names prerequisite owners, reports remai
 test('completion, archival, removed dependency, reassignment and deadline edits cancel queued stale notices',async()=>{
   const f=await fixture();await f.person('alice');const t=await f.task('deadline');f.setTime(t.dueAt-DAY);await f.mail.scanDeadlines();
   await f.task('deadline',{...t,dueAt:t.dueAt+DAY});await f.drain();assert.equal(f.sent.length,0);
-  await f.assign(t);await f.task('deadline',{...t,archived:true});await f.drain();assert.equal(f.sent.length,0);
+  await f.assign(t);await f.task('deadline',{...t,archived:true});f.advance(60000);await f.drain();assert.equal(f.sent.length,0);
   const a=await f.task('dep'),b=await f.task('dependent',{dependsOnTaskIds:['dep']});const done=await f.task('dep',{...a,completions:{m_alice:START},syncVersion:2});
   await f.assign(done,a,'complete');await f.task('dependent',{...b,dependsOnTaskIds:[]});await f.drain();assert.equal(f.sent.length,0);
 });
@@ -105,7 +159,7 @@ test('historical overdue tasks do not cause a migration burst; skipped ticks cat
 });
 
 test('retries survive service restart with unchanged provider idempotency and immutable body',async()=>{
-  const f=await fixture();await f.person('alice');const t=await f.task('retry');await f.assign(t);
+  const f=await fixture();await f.person('alice');const t=await f.task('retry');await f.assign(t);f.advance(60000);
   f.respond(()=>Response.json({message:'try later'},{status:429,headers:{'Retry-After':'120'}}));await f.drain();assert.equal(f.sent.length,1);
   f.restart();await f.task('retry',{...t,title:'changed title'});f.advance(120000);f.respond(()=>Response.json({id:'accepted'}));await f.drain();
   assert.equal(f.sent.length,2);assert.equal(f.sent[0].headers['Idempotency-Key'],f.sent[1].headers['Idempotency-Key']);assert.deepEqual(f.sent[0].body,f.sent[1].body);assert.equal(f.jobs()[0].state,'sent');
@@ -113,13 +167,13 @@ test('retries survive service restart with unchanged provider idempotency and im
 });
 
 test('ambiguous sends stop before 24h idempotency expires; permanent failures do not retry',async()=>{
-  const f=await fixture();await f.person('alice');await f.assign(await f.task('uncertain'));
+  const f=await fixture();await f.person('alice');await f.assign(await f.task('uncertain'));f.advance(60000);
   f.respond(()=>{throw Error('network');});await f.drain();f.advance(23*3600000);await f.drain();assert.equal(f.jobs()[0].state,'uncertain');assert.equal(f.sent.length,1);
-  await f.assign(await f.task('permanent'));f.respond(()=>Response.json({message:'bad request'},{status:422}));await f.drain();assert.equal(f.jobs().find(j=>j.task_id==='permanent').state,'failed');
+  await f.assign(await f.task('permanent'));f.advance(60000);f.respond(()=>Response.json({message:'bad request'},{status:422}));await f.drain();assert.equal(f.jobs().find(j=>j.task_id==='permanent').state,'failed');
 });
 
 test('malformed successful provider responses remain safely retryable',async()=>{
-  const f=await fixture();await f.person('alice');await f.assign(await f.task('ambiguous-response'));
+  const f=await fixture();await f.person('alice');await f.assign(await f.task('ambiguous-response'));f.advance(60000);
   f.respond(()=>new Response('unreadable',{status:200}));await f.drain();assert.equal(f.jobs()[0].state,'queued');
   f.advance(60000);f.respond(()=>Response.json({id:'accepted'}));await f.drain();assert.equal(f.jobs()[0].state,'sent');
   assert.equal(f.sent[0].headers['Idempotency-Key'],f.sent[1].headers['Idempotency-Key']);
@@ -127,8 +181,8 @@ test('malformed successful provider responses remain safely retryable',async()=>
 
 test('quota defers excess mail, confirmed email remains private, deleted accounts and HTML are handled safely',async()=>{
   const f=await fixture({daily:1});await f.person('alice');await f.person('bob');await f.assign(await f.task('quota',{title:'<script>alert(1)</script>',participantIds:['m_alice','m_bob']}));
-  await f.drain();assert.equal(f.sent.length,1);assert.ok(!f.sent[0].body.html.includes('<script>'));assert.ok(f.sent[0].body.html.includes('&lt;script&gt;'));
+  f.advance(60000);await f.drain();assert.equal(f.sent.length,1);assert.ok(!f.sent[0].body.html.includes('<script>'));assert.ok(f.sent[0].body.html.includes('&lt;script&gt;'));
   assert.ok(!f.sent[0].headers.Authorization.includes('undefined'));assert.equal(f.sent[0].url,'https://api.resend.com/emails');
   f.advance(DAY);await f.drain();assert.equal(f.sent.length,2);
-  await f.assign(await f.task('deleted'));f.sql.exec('DELETE FROM accounts WHERE id=?','alice');f.mail.cleanup();await f.drain();assert.equal(f.sent.length,2);assert.equal(f.mail.info('alice').email,'');
+  await f.assign(await f.task('deleted'));f.sql.exec('DELETE FROM accounts WHERE id=?','alice');f.mail.cleanup();f.advance(60000);await f.drain();assert.equal(f.sent.length,2);assert.equal(f.mail.info('alice').email,'');
 });

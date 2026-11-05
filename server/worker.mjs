@@ -205,7 +205,7 @@ export class ClubService extends DurableObject {
       const before = data.input?.taskId ? await this.store.get('tasks',data.input.taskId) : null;
       const result=await (selfAccount ? this.account(data.action, data.input || {}, account) : typeof data.action === 'string' && data.action.startsWith('admin') ? this.admin.execute(data.action, data.input || {}, account.id) : this.run(data.action, data.input, account.id));
       await this.booking.enqueue(result);
-      await this.mail.changed(before,result,data.action);
+      await this.mail.changed(before,result,data.action,account.id);
       return result;
     });
     const row = this.sql.exec('SELECT id,username FROM accounts WHERE id=?', account.id).toArray()[0];
