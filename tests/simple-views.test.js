@@ -83,6 +83,9 @@ test('bundled guest and signed-in calendars keep login/settings but remove downl
   for(const role of ['guest','owner']){
     const {simple,s}=fixture(role,true),html=simple.view(s);
     assert.doesNotMatch(html,/下载.*App|分享包|simpleFull|simpleEnter/);
+    assert.doesNotMatch(html,/<header class="simple-header"|class="simple-brand"/);
     assert.match(html,role==='guest'?/data-action="simpleLogin"/:/账号设置/);
+    assert.match(html.match(/<section class="simple-toolbar"[\s\S]*?<\/section>/)[0],role==='guest'?/simpleLogin/:/账号设置/);
   }
+  assert.match(fixture().simple.view(fixture().s),/<header class="simple-header"/);
 });

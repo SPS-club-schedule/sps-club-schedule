@@ -365,7 +365,7 @@ public class MainActivity extends Activity {
                         .setPositiveButton("清除",(d,w)->clearLocalData()).setNegativeButton("取消",null).show(); break;
                 case 4:
                     new AlertDialog.Builder(this).setTitle("SPS 社团日程 "+BuildConfig.VERSION_NAME)
-                        .setMessage("首次默认极简模式，可不登录浏览公开预约。顶部模式按钮可切换到完整模式，选择会在下次打开时保留。\n\n登录页默认勾选“记住密码”，登录成功后在本机加密保存账号密码。可以取消勾选；会话到期时自动登录，主动退出会清除保存的密码。右上角菜单中的“登录设置”可单独管理。\n\n页面、样式和脚本已内置，启动无需下载网页。任务与预约直接连接后端，联网后更新；修改界面需升级 App。\n\nAndroid 8.0 及以上，并需支持现代网页功能的系统 WebView。")
+                        .setMessage("首次默认极简模式，可不登录浏览公开预约。顶部模式按钮可切换到完整模式，选择会在下次打开时保留。\n\n登录页默认勾选“记住密码”，登录成功后在本机加密保存账号密码。可以取消勾选；会话到期时自动登录，主动退出会清除保存的密码。右上角菜单中的“登录设置”可单独管理。\n\n页面、样式和脚本已内置，启动无需下载网页。先显示上次缓存的任务与公开预约，再联网更新。退出账号清除私人任务缓存；右上角清除本机登录与缓存可清除全部本机数据。修改界面需升级 App。\n\nAndroid 8.0 及以上，并需支持现代网页功能的系统 WebView。")
                         .setPositiveButton("知道了",null).show(); break;
                 case 5: showRememberDialog();break;
                 default: break;

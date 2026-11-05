@@ -53,6 +53,7 @@ public class BundledFrontendInstrumentedTest {
             WebView view=web(first);waitFor(view,"!!document.querySelector('.simple-shell')");
             android.util.Log.i("SPSBundledTest","Offline cold start calendar ready in "+(SystemClock.elapsedRealtime()-started)+" ms");
             assertEquals("true",js(view,"!!document.querySelector('[data-action=\"simpleLogin\"]')"));
+            assertEquals("false",js(view,"!!document.querySelector('.simple-header,.simple-brand')"));
             assertEquals("false",js(view,"!!document.querySelector('[data-action=\"simpleFull\"],[data-action=\"simpleEnter\"],a[download]')"));
             assertEquals("false",js(view,"performance.getEntriesByType('resource').some(r=>/bootstrap\\.js|version\\.json|config\\.json/.test(r.name))"));
             js(view,"window.dispatchEvent(new CustomEvent('sps:select-mode',{detail:'full'}))");
@@ -65,6 +66,42 @@ public class BundledFrontendInstrumentedTest {
             WebView view=web(second);waitFor(view,"!!document.querySelector('form[data-form=\"auth\"]')");
             assertEquals("true",js(view,"location.hash.includes('next=%2Fmine')"));
             js(view,"window.dispatchEvent(new CustomEvent('sps:select-mode',{detail:'simple'}))");waitFor(view,"!!document.querySelector('.simple-shell')");
+        }finally{close(second);mode.set("simple");vault.clear();}
+    }
+    @Test public void cachedTasksAndBookingsSurviveOfflineRelaunchWithoutDuplicateHeader()throws Exception{
+        android.net.ConnectivityManager network=(android.net.ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        assertNull("Use the isolated offline test emulator",network.getActiveNetwork());
+        SessionVault vault=new SessionVault(context);vault.clear();DisplayMode mode=new DisplayMode(context);mode.set("simple");
+        MainActivity first=launch();
+        try{
+            WebView view=web(first);waitFor(view,"!!document.querySelector('.simple-shell')");
+            // Seed only virtual data while fully offline, using the public cache
+            // format produced and independently tested by the real sync client.
+            js(view,"""
+                (()=>{
+                  const n=Date.now(),d=new Date(n+8*3600000),day=d.toISOString().slice(0,10),start=Date.parse(day+'T10:00:00+08:00');
+                  const session={token:'a'.repeat(64),expiresAt:n+3600000,user:{id:'cache-test',username:'cache_test'}};
+                  sessionStorage.setItem('sps-web-session',JSON.stringify(session));sessionStorage.setItem('sps-web-club:cache-test','cache-club');
+                  const me={id:'cache-member',name:'测试同学',role:'member',joinedAt:n};
+                  const board={version:1,club:{id:'cache-club',name:'测试社团'},me,members:[me],templates:[],tasks:[{_id:'cache-task',title:'缓存任务测试',creatorId:me.id,participantIds:[me.id],completions:{},mode:'individual',priority:'normal',revision:1,startsAt:start,endsAt:start+3600000,dueAt:start+3600000}]};
+                  const put=(key,data)=>localStorage.setItem('sps-app-snapshot-v1:'+key,JSON.stringify({schema:1,savedAt:n,data}));
+                  put('board:'+JSON.stringify(['https://sps-schedule.folderrewind.top:cache-test','cache-club']),board);
+                  put('booking:https://sysu-phy-club-book.folderrewind.top',{from:day,to:day,activities:[{id:'cached-booking',club:'测试社团',title:'缓存预约测试',startsAt:start+3600000,endsAt:start+7200000}]});
+                })()
+                """);
+            long end=SystemClock.elapsedRealtime()+5000;while(!vault.read().has("session")&&SystemClock.elapsedRealtime()<end)Thread.sleep(30);
+            assertEquals("cache-club",vault.read().optString("clubId"));
+        }finally{close(first);}
+        MainActivity second=launch();
+        try{
+            WebView view=web(second);
+            waitFor(view,"document.body.innerText.includes('缓存任务测试')&&document.body.innerText.includes('缓存预约测试')");
+            assertEquals("false",js(view,"!!document.querySelector('.simple-header,.simple-brand')"));
+            assertEquals("true",js(view,"!!document.querySelector('.simple-toolbar [aria-label=\"账号设置\"]')"));
+            assertEquals("true",js(view,"document.body.innerText.includes('离线')&&document.body.innerText.includes('上次内容')"));
+            js(view,"window.dispatchEvent(new CustomEvent('sps:select-mode',{detail:'full'}))");
+            waitFor(view,"!document.querySelector('.simple-shell')&&document.body.innerText.includes('缓存任务测试')");
+            js(view,"localStorage.clear();sessionStorage.clear()");
         }finally{close(second);mode.set("simple");vault.clear();}
     }
 }

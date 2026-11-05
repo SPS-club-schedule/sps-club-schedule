@@ -1,18 +1,20 @@
 'use strict';
 
-// One in-memory board, request and timer shared by all visible pages. Do not
-// persist private club snapshots across WeChat account changes or app restarts.
-function createSyncClient({ transport, context, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
+// One board, request and timer shared by visible pages. Persistence is opt-in
+// for the App; browsers continue to keep private snapshots only in memory.
+function createSyncClient({ transport, context, cache, now = Date.now, setTimer = setTimeout, clearTimer = clearTimeout }) {
   let selected = null, board = null, generation = 0, epoch = 0;
   let inFlight = null, timer = null, timerAt = 0, writes = 0, dirty = false, fullVersion = 0;
   const taskRevisions = new Map(), templateRevisions = new Map(), memberVersions = new Map();
   let visible = true, online = true, blocked = false;
-  let phase = 'idle', message = '', checkedAt = 0, idleCount = 0, failures = 0;
+  let phase = 'idle', message = '', checkedAt = 0, idleCount = 0, failures = 0, cached = false;
   const listeners = new Set();
   const delay = () => failures ? Math.min(15000 * Math.pow(2, failures), 120000) : idleCount >= 4 ? 60000 : idleCount >= 2 ? 30000 : 15000;
   const active = () => visible && online && !blocked && listeners.size > 0;
   const cancel = () => { if (timer !== null) clearTimer(timer); timer = null; };
-  const state = () => ({ board, phase, message, checkedAt, nextDelay: delay() });
+  const state = () => ({ board, phase, message, checkedAt, cached, nextDelay: delay() });
+  function persist(){try{cache?.write(selected,board,checkedAt);}catch{}}
+  function discard(){try{cache?.remove(selected);}catch{}board=null;cached=false;}
   function emit() { for (const listener of listeners) listener(state()); }
   function ensureContext() {
     const next = context();
@@ -22,6 +24,11 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
     selected = next; generation += 1; epoch += 1; cancel();
     board = null; inFlight = null; checkedAt = 0; idleCount = 0; failures = 0; taskRevisions.clear(); templateRevisions.clear(); memberVersions.clear();
     dirty = false; fullVersion = 0; blocked = false; phase = online ? 'idle' : 'offline'; message = '';
+    cached=false;
+    try{
+      const saved=cache?.read(selected);
+      if(saved?.board){acceptRead({...saved.board,full:true});checkedAt=saved.checkedAt;cached=true;phase=online?'cached':'offline';}
+    }catch{}
   }
   function schedule(keepEarlier = false) {
     const wait = dirty ? 0 : delay();
@@ -86,7 +93,9 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
       return inFlight.promise;
     }
     if (!options.force && !options.includeClubs && !dirty && board && phase === 'ready' && now() - checkedAt < 10000) return Promise.resolve(board);
-    const full = !board || !board.club || options.includeClubs;
+    // Always revalidate membership, permissions and deletions with a full first
+    // read after restoring disk data, regardless of its age or version cursor.
+    const full = cached || !board || !board.club || options.includeClubs;
     const readGeneration = generation, readEpoch = epoch;
     const input = full ? { clubId: selected.clubId || undefined } : { clubId: board.club.id, since: board.version, memberTombstones: true };
     const ticket = { full, promise: null };
@@ -97,12 +106,12 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
       if (readEpoch !== epoch) { dirty = true; return board; }
       const changed = acceptRead(result);
       idleCount = changed ? 0 : idleCount + 1; failures = 0; dirty = false;
-      checkedAt = now(); phase = online ? 'ready' : 'offline'; message = ''; emit();
+      checkedAt = now(); cached=false;persist();phase = online ? 'ready' : 'offline'; message = ''; emit();
       return board;
     }).catch(error => {
       if (readGeneration !== generation || error.code === 'STALE_CONTEXT') throw error;
       failures += 1; dirty = false;
-      if (['FORBIDDEN', 'UNAUTHENTICATED', 'NOT_FOUND'].includes(error.code)) { board = null; blocked = true; }
+      if (['FORBIDDEN', 'UNAUTHENTICATED', 'NOT_FOUND'].includes(error.code)) { discard(); blocked = true; }
       phase = online ? 'error' : 'offline'; message = error.message; emit(); throw error;
     }).finally(() => {
       if (inFlight === ticket) { inFlight = null; schedule(); }
@@ -128,7 +137,7 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
     if (result.version >= board.version) patch.club = result.club;
     board = Object.assign({}, board, patch);
     phase = online ? 'ready' : 'offline'; message = ''; idleCount = 0; failures = 0;
-    emit();
+    persist();emit();
   }
   async function mutate(action, input) {
     ensureContext();
@@ -144,7 +153,9 @@ function createSyncClient({ transport, context, now = Date.now, setTimer = setTi
     } catch (error) {
       // A timed-out write may have committed. Read back, but never retry writes
       // automatically or show a successful completion without an acknowledgement.
-      if (writeGeneration === generation) { epoch += 1; dirty = true; }
+      if (writeGeneration === generation) { epoch += 1; dirty = true;
+        if(error.code==='UNAUTHENTICATED'){discard();emit();}
+      }
       throw error;
     } finally { writes -= 1; schedule(); }
   }

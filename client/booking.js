@@ -1,16 +1,21 @@
 import {isBookingActivity,isValidBookingActivity} from '../shared/booking-activities';
+import {appCache} from './cache';
 let base='https://sysu-phy-club-book.folderrewind.top';
 export const bookingPage='https://sps-club-schedule.github.io/sysu-phy-club-booking/';
 export const configureBooking=value=>{if(value)base=value.replace(/\/$/,'');};
+export function cachedActivities(){const saved=appCache?.readBooking(base);return saved?{...saved,activities:saved.activities.filter(isValidBookingActivity)}:null;}
 export async function otherActivities({includeSchedule=false}={}) {
+  const origin=base;
   if(typeof navigator!=='undefined'&&navigator.onLine===false)throw new Error('网络已断开，联网后更新预约');
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
   try {
-  const response=await fetch(base+'/api/activities',{cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:controller.signal});
+  const response=await fetch(origin+'/api/activities',{cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:controller.signal});
   if (!response.ok) throw new Error('预约活动暂时无法更新');
   const result=await response.json();
   if (!Array.isArray(result.activities) || !result.from || !result.to) throw new Error('活动日历返回异常');
-  return {...result,activities:result.activities.filter(includeSchedule?isValidBookingActivity:isBookingActivity)};
+  const data={activities:result.activities.filter(isValidBookingActivity),from:result.from,to:result.to};
+  appCache?.writeBooking(origin,data);
+  return {...data,activities:data.activities.filter(includeSchedule?isValidBookingActivity:isBookingActivity),checkedAt:Date.now(),cached:false};
   } catch {throw new Error('预约活动暂时无法更新');}
   finally {clearTimeout(timer);}
 }

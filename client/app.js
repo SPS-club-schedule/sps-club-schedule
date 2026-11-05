@@ -18,7 +18,7 @@ import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain
 import { scheduleDraft, enableDuration, followStart, followDuration, applyTemplateDuration, changeScheduleField, scheduleFields } from '../shared/schedule-draft';
 import { templateDurationForm, templateDurationValue } from '../shared/template-duration';
 import {personalCalendar} from '../shared/ical';
-import {configureBooking,otherActivities,enterBooking} from './booking';
+import {configureBooking,otherActivities,cachedActivities,enterBooking} from './booking';
 import {workspace} from './workspace';
 import {shiftDate,selectedScope} from '../shared/planner';
 import {archivePath,parentPath,MAX_FILE_BYTES} from '../shared/experience';
@@ -153,11 +153,11 @@ function receive(state) {
     s.booking=undefined;workspaceUi.calendarOpen=false;
     if(['edit','template-edit','templates','members'].includes(s.page)||adminPage()){s.editBoard=null;go('/mine');return;}
   }
-  if(state.board?.club && workspaceUi.clubId!==state.board.club.id){workspaceUi.clubId=state.board.club.id;workspaceUi.planner.scope=undefined;s.booking=undefined;s.bookingCheckedAt=0;}
+  if(state.board?.club && workspaceUi.clubId!==state.board.club.id){workspaceUi.clubId=state.board.club.id;workspaceUi.planner.scope=undefined;s.booking=cachedActivities();s.bookingCheckedAt=0;}
   const accessKey=state.board?.me?[state.board.club?.id,state.board.me.id,state.board.me.role,state.board.me.department].join(':'):'';
   if(workspaceUi.accessKey!==accessKey){workspaceUi.accessKey=accessKey;workspaceUi.planner.scope=undefined;if(adminPage())clearAdmin();}
   if(state.board?.me)workspaceUi.planner.scope=selectedScope(state.board.me,workspaceUi.planner.scope);
-  if ((['simple','board','mine','calendar'].includes(s.page)||workspaceUi.calendarOpen) && state.phase==='ready' && state.board?.club && !s.bookingLoading && Date.now()-(s.bookingCheckedAt || 0)>30000) loadBooking();
+  if ((['simple','board','mine','calendar'].includes(s.page)||workspaceUi.calendarOpen) && (state.phase==='ready'||state.cached) && state.board?.club && !s.bookingLoading && Date.now()-(s.bookingCheckedAt || 0)>30000) loadBooking();
   if (s.page==='templates' && s.category && state.board && !(state.board.templates || []).some(t=>t.category===s.category)) s.category='';
   if (state.board && !state.board.club && ['simple','board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(s.page)) { go('/entry'); return; }
   if (state.board?.club && !api.clubId()) api.setClub(state.board.club.id);
@@ -220,6 +220,7 @@ async function route() {
     // Keep the bearer secret out of the URL after reading the reset link.
     history.replaceState(null,'','#/reset');
   }
+  if(!s.booking&&!isSpeaker(s.sync.board?.me?.role))s.booking=cachedActivities();
   if(page==='simple')simple.enter();
   inviteKey = ''; window.scrollTo(0,0); render();
   if(page==='simple'&&!api.user()){s.sync={board:null,phase:'idle'};loadBooking();return;}
@@ -728,7 +729,7 @@ window.addEventListener('sps:select-mode', async event => {
   }
   setSimplePreferred(event.detail==='simple');go(preferredRoute());
 });
-window.addEventListener('online', () => {api.sync.setOnline(true);if(s.page==='simple'&&!api.user())loadBooking();});
+window.addEventListener('online', () => {api.sync.setOnline(true);if(s.page==='simple'||s.sync.board?.club)loadBooking();});
 window.addEventListener('offline', () => api.sync.setOnline(false));
 document.addEventListener('visibilitychange', () => {api.sync.setVisible(!document.hidden);if(!document.hidden&&s.page==='simple'&&!api.user()&&Date.now()-(s.bookingCheckedAt||0)>30000)loadBooking();});
 setInterval(()=>{if(!document.hidden&&s.page==='simple'&&!api.user()&&Date.now()-(s.bookingCheckedAt||0)>30000)loadBooking();},30000);
