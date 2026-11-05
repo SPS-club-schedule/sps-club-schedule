@@ -61,3 +61,5 @@
 - APK SHA-256：`690e0711c9f06968aa9a159ab68b6765f5736dff0e2fc34032695e1df5acbbe1`。
 - ZIP SHA-256：`725613ab94b3e3a4e89c6d59c00047c3d8910fca05200381a0b8b966ae093243`；ZIP 解压后与 APK 逐字节一致，安装说明为 UTF-8 BOM/CRLF。
 - App 界面更新需要升级 APK，任务和预约变化仍直接同步。实体手机的手势、厂商 WebView 差异及真实成员登录继续保留为人工验收范围。
+- 正式发布提交 `3be3e572601464196af1be25306a28ce6313b43d`；[Pages 发布](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/41999924818) 和 [Windows ZIP 检查](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/41999924860) 均成功。云端 203 项 JS、80 项 Worker 和 4 项网关测试全通过。
+- 线上版本 `ffc122948f00422e52560808feeab18c`，确认网站仍保留下载/分享和模式切换入口，下载版本已更新为 1.4.0；线上 APK 与 ZIP 均逐字节比对本地签名发布原件。
