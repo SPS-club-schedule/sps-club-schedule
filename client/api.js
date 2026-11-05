@@ -46,6 +46,7 @@ export const bootstrap = options => sync.refresh(options);
 export const call = (action, input) => sync.mutate(action, input);
 export const adminMembers = clubId => transport('adminMembers', { clubId });
 export const adminArchives = clubId => transport('adminArchives', { clubId });
+export const bookingEntryCode = () => transport('bookingEntryCode', {});
 export const bookingStatus = clubId => transport('bookingStatus', {clubId});
 export const experienceList=()=>request('/experience',undefined,{method:'GET'});
 export const experienceUpload=data=>request('/experience/upload',data,{timeoutMs:60000});

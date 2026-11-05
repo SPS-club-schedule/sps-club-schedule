@@ -40,3 +40,49 @@ test('durable task sync retries failures, isolates clubs, preserves private data
     await mf.dispose();mf=new Miniflare(options());const after=await api('bookingStatus',{clubId:owner.clubId},owner.token);assert.equal(after.sync.delivered,status.sync.delivered);
   }finally{await mf?.dispose();await rm(directory,{recursive:true,force:true});}
 });
+
+test('booking login checks current SPS membership and consumes a calendar code only once', {timeout:60000}, async()=>{
+  const result=await build({entryPoints:['server/worker.mjs'],bundle:true,format:'esm',platform:'neutral',external:['cloudflare:workers','node:*'],write:false});
+  const directory=await mkdtemp(join(tmpdir(),'sps-login-'));
+  const bindings={ALLOWED_ORIGINS:'https://site.test',REGISTRATION_OPEN:'true',BOOKING_SYNC_KEY:'test-key'};
+  function options(){
+    const o=convertV4MiniflareOptions({modules:[{type:'ESModule',path:'worker.mjs',contents:result.outputFiles[0].text}],compatibilityDate:'2026-07-01',compatibilityFlags:['nodejs_compat'],durableObjects:{CLUB_SERVICE:{className:'ClubService',useSQLite:true}},durableObjectsPersist:directory,bindings});
+    o.resourcePersistencePath=directory;return o;
+  }
+  const mf=new Miniflare(options());
+  const pass='Test-only-password-2026!';
+  const post=async(path,body,token)=>{
+    const r=await mf.dispatchFetch('http://localhost'+path,{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://site.test',...(token?{Authorization:'Bearer '+token}:{})},body:JSON.stringify(body)});
+    return {status:r.status,...await r.json()};
+  };
+  const register=(name,invite)=>post('/auth/register',{username:name,password:pass,nickname:name,email:name+'@example.test',name:'Test club',mode:invite?'join':'create',invite});
+  const api=(user,action,input={})=>post('/api',{action,input},user.token);
+  const bridge=(body,key='test-key')=>post('/integrations/booking/identity',body,key);
+  try {
+    const owner=(await register('club_owner')).data, outsider=(await register('other_owner')).data;
+    const clubId=owner.clubId, invite=(await api(owner,'getInvite',{clubId})).data.token;
+    const member=(await register('club_member',invite)).data;
+    bindings.BOOKING_CLUB_ID=clubId;await mf.setOptions(options());
+    assert.equal((await bridge({operation:'login',username:'club_owner',password:pass},'bad-key')).status,404);
+    assert.equal((await bridge({operation:'login',username:'club_owner',password:'incorrect-password'})).status,401);
+    for(const user of [owner,member]) {
+      const passwordLogin=await bridge({operation:'login',username:user.user.username,password:pass});
+      assert.equal(passwordLogin.data.id,user.user.id);assert.equal(passwordLogin.data.verifiedEmail,'');
+      assert.equal(passwordLogin.data.token,undefined);
+      const {code}= (await api(user,'bookingEntryCode')).data;
+      assert.deepEqual((await bridge({operation:'preview',code})).data,{username:user.user.username});
+      assert.equal((await bridge({operation:'redeem',code})).data.id,user.user.id);
+      assert.equal((await bridge({operation:'redeem',code})).status,401);
+    }
+    assert.equal((await api(outsider,'bookingEntryCode',{clubId})).status,403);
+    assert.equal((await bridge({operation:'login',username:outsider.user.username,password:pass})).status,403);
+    const stale=(await api(member,'bookingEntryCode')).data.code;
+    const row=(await api(owner,'adminMembers',{clubId})).data.members.find(m=>m.username===member.user.username);
+    assert.equal((await api(owner,'adminEditMember',{clubId,memberId:row.id,memberVersion:row.syncVersion,accountRevision:row.accountRevision,name:row.name,username:row.username,role:'speaker',department:'speaker',adminPassword:pass})).status,200);
+    assert.equal((await bridge({operation:'check',id:member.user.id})).status,403);
+    assert.equal((await bridge({operation:'redeem',code:stale})).status,403);
+    const afterLogout=(await api(owner,'bookingEntryCode')).data.code;
+    assert.equal((await post('/auth/logout',{},owner.token)).status,200);
+    assert.equal((await bridge({operation:'redeem',code:afterLogout})).status,401);
+  } finally {await mf.dispose();await rm(directory,{recursive:true,force:true});}
+});

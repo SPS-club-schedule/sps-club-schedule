@@ -14,7 +14,7 @@ import { resolveParticipants, chooseDepartment, toggleParticipant, setFollowMain
 import { scheduleDraft, enableDuration, followStart, followDuration, applyTemplateDuration, changeScheduleField, scheduleFields } from '../shared/schedule-draft';
 import { templateDurationForm, templateDurationValue } from '../shared/template-duration';
 import {personalCalendar} from '../shared/ical';
-import {configureBooking,otherActivities} from './booking';
+import {configureBooking,otherActivities,enterBooking} from './booking';
 import {workspace} from './workspace';
 import {shiftDate,selectedScope} from '../shared/planner';
 import {archivePath,parentPath,MAX_FILE_BYTES} from '../shared/experience';
@@ -526,6 +526,11 @@ root.addEventListener('submit', event => {
 root.addEventListener('click', event => {
   const el = event.target.closest('[data-action]'); if (!el || el.disabled) return;
   const { action, value, id } = el.dataset;
+  if (action === 'enterBooking') {
+    event.preventDefault();
+    if (!s.busy) perform(() => enterBooking(api.bookingEntryCode));
+    return;
+  }
   if (s.busy) return;
   if(action==='tutorial'){tutorial.open(s,api.user()?.id);return;}
   if(action==='departmentTutorial'){practiceDrafts.clear(practiceKey());tutorial.open(s,api.user()?.id,'department');return;}

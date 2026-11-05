@@ -5,6 +5,7 @@ import { username, requireAvailableUsername } from './usernames.mjs';
 import { createStore } from './store.mjs';
 import { createAdminService, bumpAccountRevision } from './admin.mjs';
 import { createAccountService } from './account.mjs';
+import { createBookingIdentity } from './booking-identity.mjs';
 import { createBookingSync, authorized } from './booking-sync.mjs';
 import { createExperienceService } from './experience.mjs';
 import { createMailService } from './mail.mjs';
@@ -69,6 +70,7 @@ export class ClubService extends DurableObject {
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at);
     CREATE TABLE IF NOT EXISTS rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires_at INTEGER NOT NULL);`);
     this.mail = createMailService({sql:this.sql,store:this.store,env});
+    this.bookingIdentity = createBookingIdentity({sql:this.sql, store:this.store, env, mail:this.mail});
     this.run = createService({ store: this.store, now: Date.now, hash, randomId: () => randomBytes(16).toString('hex') });
     this.admin = createAdminService({ store:this.store, sql:this.sql, hash, random, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'admin-password') });
     this.account = createAccountService({ store:this.store, sql:this.sql, hash, random, password, passwordHash, mail:this.mail, verifyPassword:(id,pass) => this.verifyPassword(id,pass,'account-password') });
@@ -84,6 +86,15 @@ export class ClubService extends DurableObject {
     if (row && row.expires_at > now && row.count >= maximum) fail('RATE_LIMIT', '尝试过于频繁，请稍后再试');
     this.sql.exec('INSERT INTO rate_limits VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET count=excluded.count,expires_at=excluded.expires_at',
       key, row && row.expires_at > now ? row.count + 1 : 1, row && row.expires_at > now ? row.expires_at : now + window);
+  }
+  passwordAccount(data) {
+    const name = username(data.username); password(data.password);
+    this.limit('login:' + name, 10, 15 * 60000);
+    const row = this.sql.exec('SELECT * FROM accounts WHERE username=?', name).toArray()[0];
+    const digest = passwordHash(data.password, row?.salt || '0'.repeat(64));
+    if (!row || !equal(digest, row.password_hash)) fail('UNAUTHENTICATED', '用户名或密码不正确');
+    this.sql.exec('DELETE FROM rate_limits WHERE key=?', 'login:' + name);
+    return row;
   }
   session(account) {
     const token = random(), expiresAt = Date.now() + SESSION_AGE;
@@ -105,6 +116,17 @@ export class ClubService extends DurableObject {
       this.sql.exec('DELETE FROM rate_limits WHERE expires_at < ?', Date.now());
       this.sql.exec('DELETE FROM sessions WHERE expires_at < ?', Date.now());
       this.limit('ip:' + ip, 120, 15 * 60000);
+    }
+    if (path === '/integrations/booking/identity') {
+      if (!authorized(request,this.env.BOOKING_SYNC_KEY)) fail('NOT_FOUND','接口不存在');
+      if (data.operation === 'login') return this.bookingIdentity.identity(this.passwordAccount(data).id);
+      if (data.operation === 'redeem' || data.operation === 'preview') {
+        return this.bookingIdentity.fromCode(data.code, data.operation === 'redeem');
+      }
+      if (data.operation === 'check' && typeof data.id === 'string' && /^[a-f0-9]{64}$/.test(data.id)) {
+        return this.bookingIdentity.identity(data.id);
+      }
+      fail('VALIDATION','预约登录请求无效');
     }
     if (path === '/auth/register') {
       if (this.env.REGISTRATION_OPEN !== 'true') fail('FORBIDDEN', '当前暂不接受新账号');
@@ -128,12 +150,7 @@ export class ClubService extends DurableObject {
       });
     }
     if (path === '/auth/login') {
-      const name = username(data.username); password(data.password);
-      this.limit('login:' + name, 10, 15 * 60000);
-      const row = this.sql.exec('SELECT * FROM accounts WHERE username=?', name).toArray()[0];
-      const digest = passwordHash(data.password, row?.salt || '0'.repeat(64));
-      if (!row || !equal(digest, row.password_hash)) fail('UNAUTHENTICATED', '用户名或密码不正确');
-      this.sql.exec('DELETE FROM rate_limits WHERE key=?', 'login:' + name);
+      const row = this.passwordAccount(data);
       return this.session(row);
     }
     if (path === '/auth/recover') {
@@ -158,6 +175,10 @@ export class ClubService extends DurableObject {
     const account = this.authenticate(request);
     if (path === '/auth/logout') { this.sql.exec('DELETE FROM sessions WHERE token_hash=?', account.tokenHash); return { ok: true }; }
     if (path !== '/api') fail('NOT_FOUND', '接口不存在');
+    if (data.action === 'bookingEntryCode') {
+      this.limit('booking-entry:'+account.id,30,60000);
+      return this.bookingIdentity.issue(account);
+    }
     if (data.action==='bookingStatus') {
       const member=await this.store.get('members','m_'+hash(data.input?.clubId+':'+account.id).slice(0,32));
       if (!member || member.archived) fail('FORBIDDEN','请先加入这个社团');
@@ -286,6 +307,10 @@ export default {
     if (path === '/health' && request.method === 'GET') return Response.json({ ok: true, service: 'sps-club-api' }, { headers });
     if (path==='/integrations/booking' && ['GET','POST'].includes(request.method)) {
       if (!authorized(request,env.BOOKING_SYNC_KEY)) return json({error:'Not found'},404);
+      return env.CLUB_SERVICE.get(env.CLUB_SERVICE.idFromName('sps-club-service-v1')).fetch(request);
+    }
+    if (path === '/integrations/booking/identity') {
+      if (request.method !== 'POST' || !authorized(request,env.BOOKING_SYNC_KEY)) return json({error:'Not found'},404);
       return env.CLUB_SERVICE.get(env.CLUB_SERVICE.idFromName('sps-club-service-v1')).fetch(request);
     }
     const experienceRoute=!new URL(request.url).search && ((request.method==='GET' && (path==='/experience'||/^\/experience\/files\/x_[a-f0-9]{32}$/.test(path))) || (request.method==='POST' && ['/experience/upload','/experience/manage'].includes(path)));
