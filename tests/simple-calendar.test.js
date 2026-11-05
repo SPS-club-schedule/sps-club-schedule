@@ -70,3 +70,33 @@ test('quarter-hour dragging snaps in either direction, midnight clips and overla
   const entries=[{key:'a',kind:'block',startsAt:day.start-HOUR,endsAt:NOW+HOUR},{key:'b',kind:'block',startsAt:NOW,endsAt:NOW+2*HOUR},{key:'c',kind:'block',startsAt:NOW+2*HOUR,endsAt:NOW+3*HOUR}];
   const layout=blockLayout(entries,day);assert.equal(layout[0].start,0);assert.equal(layout[0].lanes,2);assert.equal(layout[1].lane,1);assert.equal(layout[2].lanes,1);
 });
+test('simple calendar overlays manual bookings in every task scope without duplicating schedule-origin blocks',()=>{
+  const taskId='t_'+'a'.repeat(32);
+  const b={me:{id:'me',role:'owner',department:'academic'},members:[{id:'me',department:'academic'}],tasks:[{_id:taskId,title:'日程',participantIds:['me'],startsAt:NOW,endsAt:NOW+HOUR,dueAt:NOW}]};
+  const manual={id:'manual',club:'SPS',title:'手动预约',startsAt:NOW,endsAt:NOW+HOUR};
+  const activities=[manual,{...manual,id:'other',club:'其他社团'}, {...manual,id:'sps:t_'+'a'.repeat(32)+':2026-11-05'}, {...manual,endsAt:NOW},null];
+  for(const scope of ['mine','department','club']){
+    const entries=simpleEntries(b,scope,activities);
+    assert.equal(entries.length,3);assert.equal(new Set(entries.map(t=>t.key)).size,3);
+    assert.deepEqual(entries.filter(t=>t.external).map(t=>t.minor),['SPS','其他社团']);
+    const layout=blockLayout(entries,simpleDays('2026-11-05','day')[0]);
+    assert.deepEqual(new Set(layout.map(t=>t.lane)),new Set([0,1,2]));assert.ok(layout.every(t=>t.lanes===3));
+  }
+  assert.equal(simpleEntries({...b,me:{...b.me,role:'speaker'}},'mine',activities).length,1);
+});
+test('simple booking blocks span days and clip at midnight without occupying the following day',()=>{
+  const b={me:{id:'me',role:'member'},members:[],tasks:[]};
+  const entries=simpleEntries(b,'mine',[{id:'overnight',club:'SPS',title:'跨日预约',startsAt:parseDeadline('2026-11-05','23:00'),endsAt:parseDeadline('2026-11-07','00:00')}]);
+  const days=simpleDays('2026-11-05','three');
+  assert.deepEqual(blockLayout(entries,days[0]).map(t=>[t.start,t.end]),[[92,96]]);
+  assert.deepEqual(blockLayout(entries,days[1]).map(t=>[t.start,t.end]),[[0,96]]);
+  assert.equal(blockLayout(entries,days[2]).length,0);
+});
+
+test('simple calendar keeps schedule-origin reservations for tasks outside the selected scope',()=>{
+  const taskId='t_'+'b'.repeat(32),b={me:{id:'me',role:'owner'},members:[{id:'me'},{id:'other'}],tasks:[{_id:taskId,title:'其他成员活动',participantIds:['other'],startsAt:NOW,endsAt:NOW+HOUR,dueAt:NOW}]};
+  const activities=[{id:'sps:'+taskId+':2026-11-05',club:'SPS',title:'其他成员活动',startsAt:NOW,endsAt:NOW+HOUR}];
+  assert.equal(simpleEntries(b,'mine',activities)[0].external,true);
+  const club=simpleEntries(b,'club',activities);assert.equal(club.length,1);assert.equal(club[0].taskId,taskId);assert.equal(club[0].external,undefined);
+  b.tasks=[];assert.equal(simpleEntries(b,'club',activities).length,1);
+});

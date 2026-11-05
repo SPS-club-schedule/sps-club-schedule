@@ -64,5 +64,6 @@ test('manual SPS bookings survive the API and both calendars while schedule copi
   try {
     global.fetch=async()=>Response.json({from:'2026-10-30',to:'2026-12-30',activities});
     assert.deepEqual((await client.otherActivities()).activities.map(x=>x.id),[manual.id,second.id,'other']);
+    assert.deepEqual((await client.otherActivities({includeSchedule:true})).activities.map(x=>x.id),[manual.id,second.id,'other',...copies.map(x=>x.id)]);
   }finally{global.fetch=originalFetch;}
 });

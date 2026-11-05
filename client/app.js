@@ -162,7 +162,7 @@ function receive(state) {
   const accessKey=state.board?.me?[state.board.club?.id,state.board.me.id,state.board.me.role,state.board.me.department].join(':'):'';
   if(workspaceUi.accessKey!==accessKey){workspaceUi.accessKey=accessKey;workspaceUi.planner.scope=undefined;if(adminPage())clearAdmin();}
   if(state.board?.me)workspaceUi.planner.scope=selectedScope(state.board.me,workspaceUi.planner.scope);
-  if ((['board','mine','calendar'].includes(s.page)||workspaceUi.calendarOpen) && state.phase==='ready' && state.board?.club && !s.bookingLoading && Date.now()-(s.bookingCheckedAt || 0)>30000) loadBooking();
+  if ((['simple','board','mine','calendar'].includes(s.page)||workspaceUi.calendarOpen) && state.phase==='ready' && state.board?.club && !s.bookingLoading && Date.now()-(s.bookingCheckedAt || 0)>30000) loadBooking();
   if (s.page==='templates' && s.category && state.board && !(state.board.templates || []).some(t=>t.category===s.category)) s.category='';
   if (state.board && !state.board.club && ['simple','board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(s.page)) { go('/entry'); return; }
   if (state.board?.club && !api.clubId()) api.setClub(state.board.club.id);
@@ -188,7 +188,7 @@ async function loadBooking() {
   const ticket=generation,clubId=s.sync.board.club.id;
   s.bookingLoading=true;s.bookingCheckedAt=Date.now();
   try {
-    const [data,status]=await Promise.all([otherActivities(),api.bookingStatus(clubId).catch(()=>null)]);
+    const [data,status]=await Promise.all([otherActivities({includeSchedule:true}),api.bookingStatus(clubId).catch(()=>null)]);
     if(ticket!==generation)return;
     s.booking={...data,sync:status};
   } catch(error) {if(ticket===generation)s.booking={...s.booking,error:error.message};}
