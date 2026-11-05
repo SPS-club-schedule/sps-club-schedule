@@ -21,3 +21,10 @@
 - 生产配置网站构建、`git diff --check`、APK v2 签名验证通过。App 1.6.0 / code 7，沿用原包名和证书，可覆盖升级。
 - APK 2,113,375 字节，SHA-256：`d7f38f91eb08392c7e9882fc1aad23ae3e9dd1bd131584e908e0c4af626f0cf4`。
 - ZIP 2,073,642 字节，SHA-256：`f592d2c9e244ba4c40159d9bd9e605b8170b8c0ad3449a5834e8338ddcf9583b`；解压后与签名 APK 逐字节一致。
+
+## 正式发布
+
+- 提交 `2062394a955f8fd507da9d8b54493a3d35c2f38c`；[Pages 发布](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/42007014373) 与 [Windows ZIP 校验](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/42007014374) 成功。
+- 云端 212 项 JS、80 项 Worker、4 项网关及 24 项真实浏览器检查全部通过。
+- 线上版本 `d86626bcee5d90e791fb31f73fe3798c`，确认脚本包含准确的完成方框选择器、既有文档编辑步骤、缺失目标状态和新下载版本，样式包含响应式高亮规则。
+- 正式下载的 APK、ZIP 均逐字节比对本地签名发布原件。无业务后端改动或生产任务/文档写入；已完成者可从原入口手动重看。
