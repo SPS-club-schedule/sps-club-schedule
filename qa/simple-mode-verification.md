@@ -75,3 +75,6 @@
 - 生产配置网站构建、差异检查通过；签名 APK 离线页面截图检查确认单一顶部栏及日历工具栏登录按钮。版本 1.5.0 / code 6、原包名和证书，支持覆盖原统一 App。
 - APK 2,112,307 字节，SHA-256：`505f7f7ba2a76262bfd6bfecc5dd87a522ab359d974d0868a9ac360cee68ef8d`。
 - ZIP 2,072,394 字节，SHA-256：`2e19991131cdd8b420c9afb2faf64d9bd48efc10d242843ecfa1369ba8d9d279`；UTF-8 BOM/CRLF 安装说明，解压 APK 与原件一致。
+- 签名发布包另经正式公开接口只读验证：联网加载预约后强制停止进程，断网重开仍显示“保留上次内容”。未使用真实成员账号或写入生产数据。
+- 正式提交 `204e3667ccb400ce331e8183afebc6435cb35517`；[Pages 发布](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/42002982262) 与 [Windows 分享 ZIP 检查](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/42002982470) 均成功，云端 212/80/4 项 JS、Worker、网关检查全通过。
+- 线上版本 `7494b43540df720cad3266d4ffb5036f`，网站仍含标题栏、模式和下载入口，下载版本更新至 1.5.0；线上 APK 与 ZIP 均逐字节比对本地签名原件。
