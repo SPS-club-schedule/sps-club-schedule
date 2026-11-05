@@ -87,7 +87,8 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     ).toArray();
     for (const job of jobs) {
       const context = JSON.parse(job.context);
-      if (job.kind === 'assignment_list') {
+      if (job.kind === 'day_list' || job.kind === 'deadline_list') return deadlineMessage(job.kind, task, me, roster, c, email);
+    if (job.kind === 'assignment_list') {
         if (!context.taskIds.includes(taskId)) continue;
         context.taskIds = context.taskIds.filter(id => id !== taskId);
         if (context.taskIds.length) {
@@ -143,17 +144,56 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     }
   }
   async function scanDeadlines() {
-    const tasks=await store.find('tasks',{}),members=await store.find('members',{}),time=now();
-    for(const task of tasks) {
-      if(!active(task)||taskDone(task)||!Number.isSafeInteger(task.dueAt)||task.dueAt<startedAt||time>task.dueAt+7*DAY)continue;
-      const roster=members.filter(m=>!m.archived&&m.clubId===task.clubId),pending=roster.filter(m=>memberPending(task,m._id));
-      if(time>=task.dueAt) {
-        const recipients=new Set(pending.map(m=>m.identity));
-        for(const manager of roster.filter(m=>m.role==='department_admin'&&m.department&&pending.some(p=>p.department===m.department)))recipients.add(manager.identity);
-        for(const identity of recipients)enqueue(`deadline:${task._id}:${task.dueAt}:${identity}`,'deadline',identity,task._id,{dueAt:task.dueAt},task.dueAt+7*DAY,1);
-      } else if(task.dueAt-DAY>=startedAt&&time>=task.dueAt-DAY) {
-        for(const member of pending)enqueue(`day:${task._id}:${task.dueAt}:${member._id}`,'day',member.identity,task._id,{memberId:member._id,dueAt:task.dueAt},task.dueAt,4);
+    const time = now();
+    const tasks = await store.find('tasks', {});
+    const members = await store.find('members', {});
+    const roots = new Map(tasks.filter(t => active(t) && !t.parentTaskId).map(t => [t._id, t]));
+    const groups = new Map();
+
+    // Before this release, each task had its own key. Rebuild only untouched notices;
+    // a legacy send that might already have reached Resend must keep its own retry key.
+    sql.exec(`UPDATE email_outbox SET state='superseded',context='{}'
+      WHERE kind IN ('day','deadline') AND state='queued' AND first_attempt=0`);
+    const oldAttempts = new Set(sql.exec(`SELECT id FROM email_outbox
+      WHERE kind IN ('day','deadline') AND first_attempt>0 AND expires_at>?`, time).toArray().map(row => row.id));
+
+    for (const task of tasks) {
+      const {dueAt, clubId} = task;
+      const rootId = task.parentTaskId || task._id;
+      if (!active(task) || taskDone(task) || roots.get(rootId)?.clubId !== clubId) continue;
+      if (!Number.isSafeInteger(dueAt) || dueAt < startedAt || time >= dueAt + 7 * DAY) continue;
+      const overdue = time >= dueAt;
+      if (!overdue && (time < dueAt - DAY || dueAt - DAY < startedAt)) continue;
+
+      const roster = members.filter(m => active(m) && m.clubId === clubId);
+      const pending = roster.filter(m => memberPending(task, m._id));
+      const recipients = new Set(pending);
+      if (overdue) {
+        const departments = new Set(pending.map(m => m.department).filter(Boolean));
+        for (const member of roster) {
+          if (member.role === 'department_admin' && departments.has(member.department)) recipients.add(member);
+        }
       }
+      const kind = overdue ? 'deadline_list' : 'day_list';
+      for (const member of recipients) {
+        if (oldAttempts.size) {
+          const oldKey = overdue ? `deadline:${task._id}:${dueAt}:${member.identity}` : `day:${task._id}:${dueAt}:${member._id}`;
+          if (oldAttempts.has(hash(oldKey))) continue;
+        }
+        const key = JSON.stringify([kind, clubId, rootId, dueAt, member.identity]);
+        if (!groups.has(key)) groups.set(key, {kind, rootId, dueAt, accountId:member.identity, taskIds:[]});
+        groups.get(key).taskIds.push(task._id);
+      }
+    }
+    for (const [key, group] of groups) {
+      const overdue = group.kind === 'deadline_list';
+      // Refresh the list until its first send. Repeated scans cannot reopen a sent group.
+      sql.exec(`INSERT INTO email_outbox(id,kind,account_id,task_id,context,created_at,expires_at,priority)
+        VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET context=excluded.context,state='queued',
+        next_attempt=CASE WHEN email_outbox.state='cancelled' THEN 0 ELSE email_outbox.next_attempt END
+        WHERE first_attempt=0 AND state IN ('queued','cancelled') AND context<>excluded.context`,
+        hash(key), group.kind, group.accountId, group.rootId, JSON.stringify({dueAt:group.dueAt,taskIds:group.taskIds}),
+        time, group.dueAt + (overdue ? 7 * DAY : 0), overdue ? 1 : 4);
     }
   }
   const site=()=>env.EMAIL_SITE_URL||'https://sps-club-schedule.github.io/sps-club-schedule/';
@@ -187,6 +227,38 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     return message(email.email, subject, [member.name + '，你好：', '社团：' + (club?.name || 'SPS'),
       `你被安排负责以下 ${links.length} 项工作，可点击查看详情。`], links);
   }
+  async function deadlineMessage(kind, root, me, roster, context, email) {
+    const overdue = kind === 'deadline_list';
+    if (overdue !== (now() >= context.dueAt)) return null;
+    const departmentMembers = overdue && me.role === 'department_admin' && me.department
+      ? roster.filter(member => member.department === me.department) : [];
+    const links = [];
+    for (const id of context.taskIds) {
+      const task = id === root._id ? root : await store.get('tasks', id);
+      if (!active(task) || task.clubId !== root.clubId || task.dueAt !== context.dueAt) continue;
+      if (task._id !== root._id && task.parentTaskId !== root._id) continue;
+      const own = memberPending(task, me._id);
+      const managed = departmentMembers.filter(member => memberPending(task, member._id));
+      if (!own && !managed.length) continue;
+
+      const details = [];
+      if (own) details.push('你负责');
+      if (managed.length) details.push(departments.departmentLabel(me.department) + '未完成：' + managed.map(m => m.name).join('、'));
+      links.push({
+        label: (id === root._id ? '主任务' : '子任务') + '「' + task.title + '」 · ' + details.join('；'),
+        url: site() + '#/task?id=' + encodeURIComponent(id) + '&club=' + encodeURIComponent(root.clubId)
+      });
+    }
+    if (!links.length) return null;
+    if (!email?.verified_at) return undefined;
+    const club = await store.get('clubs', root.clubId);
+    const showRoot = me.role !== 'speaker' || root.participantIds.includes(me._id);
+    const subject = (overdue ? '[SPS] 任务已到期：' : '[SPS] 任务将于一天内截止：') + (showRoot ? root.title : club?.name || 'SPS');
+    const lines = [me.name + '，你好：', '社团：' + (club?.name || 'SPS'), '截止时间：' + date(context.dueAt),
+      overdue ? '以下工作已逾期，请及时跟进。' : '以下工作将在24小时内截止，请留意进度。'];
+    if (departmentMembers.length) lines.push('请作为部门管理员跟进列出的本部门未完成人。');
+    return message(email.email, subject, lines, links);
+  }
   // Returns null for obsolete events, undefined for an email awaiting verification.
   async function materialize(job) {
     const c=JSON.parse(job.context),email=emailRow(job.account_id);
@@ -201,6 +273,7 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     if(task.parentTaskId&&!active(parent))return null;
     const roster=(await store.find('members',{clubId:task.clubId})).filter(m=>!m.archived),me=roster.find(m=>m.identity===job.account_id);
     if(!me)return null;
+    if (job.kind === 'day_list' || job.kind === 'deadline_list') return deadlineMessage(job.kind, task, me, roster, c, email);
     if (job.kind === 'assignment_list') return assignmentMessage(task, me, c, email);
     const own=memberPending(task,me._id),pending=roster.filter(m=>memberPending(task,m._id));
     const club=await store.get('clubs',task.clubId),lines=[`${me.name}，你好：`,`社团：${club?.name||'SPS'}`,`任务：${task.title}`];
@@ -250,6 +323,11 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
       if(job.first_attempt&&time-job.first_attempt>=23*3600000){sql.exec("UPDATE email_outbox SET state='uncertain',payload=NULL,error_code='idempotency_window' WHERE id=?",job.id);continue;}
       const stored=job.payload?JSON.parse(job.payload):payload;
       if(job.payload&&stored.to[0]!==payload.to[0]){sql.exec("UPDATE email_outbox SET state='cancelled',payload=NULL WHERE id=?",job.id);continue;}
+      // Never retry a frozen digest containing tasks or departmental details now withdrawn.
+      if (job.payload && ['day_list','deadline_list'].includes(job.kind) && job.payload !== JSON.stringify(payload)) {
+        sql.exec("UPDATE email_outbox SET state='uncertain',payload=NULL,context='{}',error_code='deadline_list_changed' WHERE id=?",job.id);
+        continue;
+      }
       const day=Math.floor(time/DAY),limit=Math.max(1,Number(env.EMAIL_DAILY_LIMIT)||100);
       if(!job.first_attempt) {
         const used=sql.exec('SELECT used FROM email_usage WHERE day=?',day).toArray()[0]?.used||0;

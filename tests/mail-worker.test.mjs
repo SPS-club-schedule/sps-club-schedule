@@ -61,13 +61,18 @@ test('Worker enforces email onboarding, privately verifies email, persists outbo
     assert.deepEqual(assignments[0].to,[member.user.email]);
     assert.match(assignments[0].text,/以下 2 项/);
     for(const child of task.tasks.slice(1))assert.ok(assignments[0].text.includes('#/task?id='+child._id+'&club='+clubId));
-    // A self-assigned root still receives its ordinary deadline reminder.
+    // Root and both children now share a deadline. Each person gets just their own list.
     const past=Date.now()-1;
-    await storage.exec("UPDATE records SET data=json_set(data,'$.dueAt',?) WHERE collection='tasks' AND id=?",past,task.taskId);
+    await storage.exec("UPDATE records SET data=json_set(data,'$.dueAt',?) WHERE collection='tasks' AND (id=? OR json_extract(data,'$.parentTaskId')=?)",past,task.taskId,task.taskId);
     await (await mf.getWorker()).scheduled({cron:'* * * * *',scheduledTime:Date.now()});
-    await wait(()=>sent.some(x=>x.subject.includes('到期')));
+    await wait(()=>sent.filter(x=>x.subject.includes('到期')).length===2);
+    for (const [account, id] of [[owner,ownerBoard.me.id],[member,board.me.id]]) {
+      const notices = sent.filter(x=>x.subject.includes('到期') && x.to[0]===account.user.email);
+      assert.equal(notices.length,1);
+      for (const item of task.tasks) assert.equal(notices[0].text.includes('#/task?id='+item._id+'&club='+clubId),item.participantIds.includes(id));
+    }
     await (await mf.getWorker()).scheduled({cron:'* * * * *',scheduledTime:Date.now()});
-    assert.equal(sent.filter(x=>x.subject.includes('到期')).length,1);
+    assert.equal(sent.filter(x=>x.subject.includes('到期')).length,2);
     // An old account has no email record, but can still log in and bind one after password confirmation.
     await storage.exec('DELETE FROM account_emails WHERE account_id=?',member.user.id);
     const legacy=await post('/auth/login',{username:member.user.username,password:'Email-test-password!'});assert.equal(legacy.status,200);assert.equal(legacy.data.user.email,'');
@@ -77,7 +82,7 @@ test('Worker enforces email onboarding, privately verifies email, persists outbo
     await api('accountVerifyEmail',{revision:requested.account.revision,code:code('legacy@example.test')},legacy.data.token);
     await mf.dispose();mf=new Miniflare(options());
     const persisted=await api('accountSettings',{},legacy.data.token);assert.equal(persisted.account.emailVerified,true);assert.equal(persisted.account.email,'legacy@example.test');
-    await (await mf.getWorker()).scheduled({cron:'* * * * *',scheduledTime:Date.now()});assert.equal(sent.filter(x=>x.subject.includes('到期')).length,1);
+    await (await mf.getWorker()).scheduled({cron:'* * * * *',scheduledTime:Date.now()});assert.equal(sent.filter(x=>x.subject.includes('到期')).length,2);
     const limited=(await register('email_limited')).data;
     for(let i=0;i<6;i++)assert.equal((await attempt('accountVerifyEmail',{revision:1,code:'000000'},limited.token)).status,400);
     assert.equal((await attempt('accountVerifyEmail',{revision:1,code:'000000'},limited.token)).status,429);

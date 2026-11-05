@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {createStore} from '../server/store.mjs';
 import {createMailService,taskDone} from '../server/mail.mjs';
@@ -129,6 +130,101 @@ test('one person with both roles gets one due email, shared completion stops all
   const mine=f.sent.find(x=>x.body.to[0]==='alice@example.test').body.text;assert.match(mine,/你负责/);assert.match(mine,/部门管理员/);
   const done=await f.task('finished',{mode:'shared',dueAt:t.dueAt,sharedCompletion:{memberId:'m_alice',at:t.dueAt}});
   await f.assign(done);await f.mail.scanDeadlines();await f.drain();assert.equal(f.sent.length,2);
+});
+
+test('each reminder stage groups by root, exact deadline and account; department reports combine personal and managed work', async()=>{
+  const f=await fixture();
+  await f.person('lead',{role:'department_admin'});
+  await f.person('assistant',{role:'department_admin'});
+  await f.person('alice');
+  await f.person('bob',{department:'publicity'});
+  await f.person('outside',{clubId:'other',role:'department_admin'});
+  const dueAt=START+2*DAY;
+  const root=await f.task('event',{participantIds:['m_lead'],dueAt:dueAt+DAY*2});
+  const child=(id,participantIds,extra={})=>f.task(id,{parentTaskId:root._id,participantIds,dueAt,...extra});
+  await child('poster',['m_lead','m_alice','m_bob']);
+  await child('venue',['m_alice']);
+  await child('private-other-department',['m_bob']);
+  await child('finished',['m_alice'],{completions:{m_alice:START}});
+  await child('separate-minute',['m_alice'],{dueAt:dueAt+60_000});
+  await f.task('separate-root',{participantIds:['m_alice'],dueAt});
+  f.setTime(dueAt-DAY+60_000);
+  await f.mail.scanDeadlines();await f.drain();
+  const matching=(id,stage)=>f.sent.map(x=>x.body).filter(body=>body.to[0]===id+'@example.test'&&body.subject.includes(stage));
+  const links=body=>[...body.text.matchAll(/#\/task\?id=([^&]+)&club=/g)].map(m=>m[1]).sort();
+  const lists=(id,stage)=>matching(id,stage).map(links).sort();
+  assert.deepEqual(lists('alice','一天'),[['poster','venue'],['separate-minute'],['separate-root']]);
+  assert.deepEqual(lists('lead','一天'),[['poster']]);
+  assert.deepEqual(lists('assistant','一天'),[]);
+  assert.deepEqual(lists('bob','一天'),[['poster','private-other-department']]);
+
+  f.setTime(dueAt+60_000);
+  await f.mail.scanDeadlines();f.restart();await f.mail.scanDeadlines();await f.drain();
+  await f.mail.scanDeadlines();await f.drain();
+  const expected=[['poster','venue'],['separate-minute'],['separate-root']];
+  for(const id of ['lead','assistant','alice']) assert.deepEqual(lists(id,'到期'),expected);
+  assert.deepEqual(lists('outside','到期'),[]);
+  assert.deepEqual(lists('bob','到期'),[['poster','private-other-department']]);
+  const lead=matching('lead','到期').find(body=>links(body).includes('poster'));
+  assert.match(lead.text,/子任务「poster」 · 你负责；[^\n]*未完成：[^\n]*alice/);
+  assert.match(lead.text,/子任务「venue」 · [^\n]*未完成：alice/);
+  assert.doesNotMatch(lead.text,/bob|private-other-department|finished/);
+});
+
+test('a queued reminder uses current responsibilities and deadline; identical rescans consume one send',async()=>{
+  const f=await fixture();await f.person('alice');await f.person('bob');
+  const root=await f.task('root',{participantIds:['m_bob'],dueAt:START+4*DAY});
+  const dueAt=START+2*DAY;
+  const add=(id,extra={})=>f.task(id,{parentTaskId:root._id,participantIds:['m_alice'],dueAt,...extra});
+  await add('kept');await add('completed');await add('rescheduled');
+  f.setTime(dueAt);await f.mail.scanDeadlines();
+  await add('rescheduled',{dueAt:dueAt+2*DAY});await add('new');
+  await f.mail.scanDeadlines();
+  await add('completed',{completions:{m_alice:dueAt}});
+  await f.drain();
+  assert.equal(f.sent.length,1);
+  assert.match(f.sent[0].body.text,/子任务「kept」/);
+  assert.match(f.sent[0].body.text,/子任务「new」/);
+  assert.doesNotMatch(f.sent[0].body.text,/completed|rescheduled/);
+  await f.mail.scanDeadlines();await f.drain();
+  assert.equal(f.rows('SELECT SUM(used) AS n FROM email_usage')[0].n,1);
+});
+
+test('upgrade folds untouched legacy mail into a digest and never replays attempted legacy task keys',async()=>{
+  const f=await fixture();await f.person('alice');const dueAt=START+2*DAY;
+  await f.task('root',{participantIds:[],dueAt:dueAt+DAY});
+  for(const id of ['already','waiting','new'])await f.task(id,{parentTaskId:'root',dueAt});
+  for(const kind of ['day','deadline']){
+    const time=kind==='day'?dueAt-DAY:dueAt, expiry=kind==='day'?dueAt:dueAt+7*DAY;
+    f.setTime(time);
+    for(const [id,state] of [['already','sent'],['waiting','queued']]){
+      const key=[kind,id,dueAt,kind==='day'?'m_alice':'alice'].join(':');
+      f.sql.exec(`INSERT INTO email_outbox(id,kind,task_id,account_id,state,first_attempt,context,created_at,expires_at,priority)
+        VALUES(?,?,?,'alice',?,?,?,?,?,1)`,createHash('sha256').update(key).digest('hex'),kind,id,state,state==='sent'?time:0,JSON.stringify({dueAt,memberId:'m_alice'}),time,expiry);
+    }
+    await f.mail.scanDeadlines();await f.drain();f.restart();await f.mail.scanDeadlines();await f.drain();
+    const deliveries=f.sent.filter(x=>x.body.subject.includes(kind==='day'?'一天':'到期'));
+    assert.equal(deliveries.length,1);
+    assert.match(deliveries[0].body.text,/「new」/);assert.match(deliveries[0].body.text,/「waiting」/);
+    assert.doesNotMatch(deliveries[0].body.text,/already/);
+  }
+});
+
+test('ambiguous digest retry preserves idempotency and cannot resend departed department members to the former manager',async()=>{
+  const f=await fixture();await f.person('alice',{role:'department_admin'});await f.person('bob');
+  await f.task('root',{participantIds:['m_alice','m_bob']});
+  await f.task('child',{parentTaskId:'root',participantIds:['m_alice']});
+  f.setTime(START+2*DAY);await f.mail.scanDeadlines();
+  f.respond(()=>{throw Error('network');});await f.drain();
+  const first=f.sent.find(x=>x.body.to[0]==='alice@example.test');assert.match(first.body.text,/部门管理员/);
+  f.restart();f.advance(60_000);await f.mail.scanDeadlines();await f.drain();
+  const attempts=f.sent.filter(x=>x.body.to[0]==='alice@example.test');
+  assert.equal(attempts.length,2);assert.equal(attempts[0].headers['Idempotency-Key'],attempts[1].headers['Idempotency-Key']);
+  assert.deepEqual(attempts[0].body,attempts[1].body);
+  const me=await f.store.get('members','m_alice');await f.store.put('members','m_alice',{...me,role:'member'});
+  f.advance(120_000);await f.mail.scanDeadlines();await f.drain();
+  assert.equal(f.sent.filter(x=>x.body.to[0]==='alice@example.test').length,2);
+  assert.equal(f.jobs().find(j=>j.account_id==='alice').state,'uncertain');
 });
 
 test('dependency needs full completion, names prerequisite owners, reports remaining prerequisites, handles re-completion',async()=>{
