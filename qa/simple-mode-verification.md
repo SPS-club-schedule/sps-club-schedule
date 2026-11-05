@@ -46,3 +46,18 @@
 - ZIP SHA-256：`35b8afe9096241d8dae0c7514a48c7ae27638422a0663ae3dbcdb4d4dc1f882b`。ZIP 仅包含同名 APK 与 UTF-8 BOM 安装说明，解压字节与签名原件一致。
 - 正式发布提交 `abaa217c5428c14cacde63e4b7b34710f835d13b`；[Pages 发布与全部检查](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/41994805953)、[Windows 分享包校验](https://github.com/SPS-club-schedule/sps-club-schedule/actions/runs/41994805819) 均成功。
 - 线上版本 `3c03b4d5952466eb08113c4bfe90000b`。正式根网址在无登录状态下直接显示极简周历、两条公开预约及登录按钮；新 APK/ZIP 下载已逐字节比对签名发布原件。
+
+
+## 内置前端 App 1.4.0（2026-11-05）
+
+- 将同一套前端源码构建为 APK 资源，含完整页面、样式、脚本分块、字体和仓库档案；不打包网站下载目录。后端仍为原任务 API 与预约 API，无后端或数据库改动。
+- `WebViewAssetLoader` 在原 HTTPS 源与入口路径提供签名包中的文件，精确清单外路径返回 404；不回退到远程脚本。启动不请求 bootstrap、version 或 config，内置配置始终使用正式后端。网站仍采用原有发布和更新机制。
+- App 内去除下载 APK、分享 ZIP 和网页的完整/极简切换入口，只保留原生顶部模式按钮；网站保留这些入口。后台自动登录不阻塞界面，手动提交登录会取消旧的自动登录结果，防止覆盖用户选择。
+- `npm test` 203 项通过；新测试实际执行 Android 前端构建，校验清单哈希、所有静态依赖、独立打包配置和 App/网站入口差异。生产网站构建、`git diff --check` 通过。
+- Android `testDebugUnitTest lintRelease assembleRelease` 通过，2 项 JVM 测试通过；API 35 专用模拟器上 14 项设备测试全部通过，包括 Keystore、原生桥隔离、会话恢复与过期、记住密码、模式持久化、离线资源路径和实际 WebView 离线加载。
+- 设备测试期间关闭网络，仅使用伪凭据与替代连接。测试结束后安装全新签名发布包，断网显示完整样式的极简日历和“联网后更新预约”；联网重启后从正式公开预约 API 获取窗口，未登录、未写生产数据。
+- 离线自动化测试记录：Activity 启动至出现日历 DOM 为 508 ms，仅代表此模拟器的一次结果，不代表实体手机或远端数据加载耗时。签名 APK 的离线页面另经截图检查，下载及重复模式按钮未显示。
+- 版本 1.4.0 / code 5、包名 `org.spsclub.schedule`、最低 Android 8.0。APK v2 签名有效，与 1.3.0 证书相同；包内 91 份前端资源，共 1,949,017 字节（未压缩）。APK 2,111,327 字节，ZIP 2,071,258 字节。
+- APK SHA-256：`690e0711c9f06968aa9a159ab68b6765f5736dff0e2fc34032695e1df5acbbe1`。
+- ZIP SHA-256：`725613ab94b3e3a4e89c6d59c00047c3d8910fca05200381a0b8b966ae093243`；ZIP 解压后与 APK 逐字节一致，安装说明为 UTF-8 BOM/CRLF。
+- App 界面更新需要升级 APK，任务和预约变化仍直接同步。实体手机的手势、厂商 WebView 差异及真实成员登录继续保留为人工验收范围。

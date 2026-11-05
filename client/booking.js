@@ -3,6 +3,7 @@ let base='https://sysu-phy-club-book.folderrewind.top';
 export const bookingPage='https://sps-club-schedule.github.io/sysu-phy-club-booking/';
 export const configureBooking=value=>{if(value)base=value.replace(/\/$/,'');};
 export async function otherActivities({includeSchedule=false}={}) {
+  if(typeof navigator!=='undefined'&&navigator.onLine===false)throw new Error('网络已断开，联网后更新预约');
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
   try {
   const response=await fetch(base+'/api/activities',{cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:controller.signal});

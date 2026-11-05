@@ -42,6 +42,7 @@ import java.util.Collections;
 public class MainActivity extends Activity {
     private static final int PICK_FILE = 20, SAVE_FILE = 21;
     private WebView web;
+    private BundledFrontend frontend;
     private SessionVault vault;
     private ScriptHandler bridgeScript;
     private String bridgeSource;
@@ -72,6 +73,7 @@ public class MainActivity extends Activity {
                 while ((count = input.read(buffer)) != -1) bytes.write(buffer,0,count);
                 bridgeSource = bytes.toString("UTF-8");
             }
+            frontend=new BundledFrontend(this);
             configureWebView();
             loadHome();
         } catch (Exception error) {
@@ -130,6 +132,7 @@ public class MainActivity extends Activity {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) throw new IllegalStateException("Unsupported WebView");
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         settings.setAllowFileAccess(false); settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setJavaScriptCanOpenWindowsAutomatically(false);
@@ -159,8 +162,10 @@ public class MainActivity extends Activity {
                                 toast("无法保存登录状态，本次退出后请重新登录");
                             }
                             break;
+                        case "loginStarted": cancelLogin();break;
                         case "webLogin":
-                            if(loginBusy || data.length()>16384)return;
+                            if(data.length()>16384)return;
+                            cancelLogin();
                             try {installSnapshot(vault.rememberWebLogin(input));}
                             catch(Exception error){vault.clearCredentials();toast("本次登录可继续使用，但未能保存密码，请下次登录时重试");}
                             break;
@@ -170,10 +175,9 @@ public class MainActivity extends Activity {
                             cancelLogin();
                             if(vault.credentials().has("password")){vault.clearCredentials();toast("密码已变更，下次正常登录时会自动保存新密码");}
                             break;
-                        case "sessionExpired": if(!loginBusy && vault.mayAutoLogin())loadHome();break;
+                        case "sessionExpired": maybeAutoLogin();break;
                         case "saveText": saveText(input); break;
                         case "download": openBrowser(input.optString("url")); break;
-                        case "offline": showError("暂时无法连接", "请检查网络后重试。已保存的登录状态会保留；任务内容需要联网同步。"); break;
                         case "notice": toast(input.optString("text").substring(0, Math.min(150,input.optString("text").length()))); break;
                         default: break;
                     }
@@ -190,7 +194,7 @@ public class MainActivity extends Activity {
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 if (request.isForMainFrame() && !TrustedSite.isPage(request.getUrl().toString()))
                     return new WebResourceResponse("text/plain","UTF-8",new java.io.ByteArrayInputStream(new byte[0]));
-                return null;
+                return frontend.intercept(request.getUrl());
             }
             @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon) {
                 if (!TrustedSite.isPage(url)) { view.stopLoading(); return; }
@@ -198,7 +202,7 @@ public class MainActivity extends Activity {
             }
             @Override public void onPageFinished(WebView view,String url) {
                 CookieManager.getInstance().flush();
-                if (!loadFailed && TrustedSite.isPage(url)) { cover.setVisibility(View.GONE); progress.setVisibility(View.INVISIBLE); }
+                if (!loadFailed && TrustedSite.isPage(url)) { cover.setVisibility(View.GONE); progress.setVisibility(View.INVISIBLE);maybeAutoLogin(); }
             }
             @Override public void onReceivedError(WebView view,WebResourceRequest request,WebResourceError error) {
                 if (request.isForMainFrame()) showError("暂时无法连接", "请检查网络后重试。已保存的登录状态会保留；任务内容需要联网同步。");
@@ -246,22 +250,18 @@ public class MainActivity extends Activity {
         cover.setVisibility(View.VISIBLE); progress.setVisibility(View.INVISIBLE);
     }
     private void loadHome() {
-        if(loginBusy)return;
+        coverTitle.setText("正在打开社团日程");coverText.setText("先看日历，登录后安排自己的任务。");retry.setVisibility(View.GONE);
+        web.loadUrl(TrustedSite.start(displayMode.get()));
+    }
+    private void maybeAutoLogin(){
+        if(loginBusy||vault.read().has("session")||!vault.mayAutoLogin())return;
         android.net.ConnectivityManager manager=(android.net.ConnectivityManager)getSystemService(CONNECTIVITY_SERVICE);
         android.net.NetworkCapabilities network=manager.getNetworkCapabilities(manager.getActiveNetwork());
-        if (network==null || !network.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-            showError("暂时无法连接", "请检查网络后重试。已保存的登录状态会保留；任务内容需要联网同步。");
-            return;
-        }
-        if(!vault.read().has("session") && vault.mayAutoLogin()) {
-            JSONObject credentials=vault.credentials();
-            coverTitle.setText("正在自动登录");coverText.setText("使用这台手机保存的账号连接社团日程…");retry.setVisibility(View.GONE);cover.setVisibility(View.VISIBLE);
-            vault.delayAutoLogin(60000);
-            beginLogin(credentials.optString("username"),credentials.optString("password"),true,()->{},message->{toast(message);loadHome();});
-            return;
-        }
-        coverTitle.setText("正在打开社团日程"); coverText.setText("先看公开日历，登录后安排自己的任务。"); retry.setVisibility(View.GONE);
-        web.loadUrl(TrustedSite.start(displayMode.get()));
+        if(network==null||!network.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET))return;
+        JSONObject credentials=vault.credentials();vault.delayAutoLogin(60000);
+        // The local UI is already usable. A slow password refresh must never
+        // keep the guest calendar behind a loading cover.
+        beginLogin(credentials.optString("username"),credentials.optString("password"),true,()->{},this::toast);
     }
     private void updateModeButton(){
         modeButton.setText("simple".equals(displayMode.get())?"极简模式 ▾":"完整模式 ▾");
@@ -365,7 +365,7 @@ public class MainActivity extends Activity {
                         .setPositiveButton("清除",(d,w)->clearLocalData()).setNegativeButton("取消",null).show(); break;
                 case 4:
                     new AlertDialog.Builder(this).setTitle("SPS 社团日程 "+BuildConfig.VERSION_NAME)
-                        .setMessage("首次默认极简模式，可不登录浏览公开预约。顶部模式按钮可切换到完整模式，选择会在下次打开时保留。\n\n登录页默认勾选“记住密码”，登录成功后在本机加密保存账号密码。可以取消勾选；会话到期时自动登录，主动退出会清除保存的密码。右上角菜单中的“登录设置”可单独管理。\n\n任务、日历与经验档案从网站加载，网页更新会自动生效。使用需要联网。\n\nAndroid 8.0 及以上，并需支持现代网页功能的系统 WebView。")
+                        .setMessage("首次默认极简模式，可不登录浏览公开预约。顶部模式按钮可切换到完整模式，选择会在下次打开时保留。\n\n登录页默认勾选“记住密码”，登录成功后在本机加密保存账号密码。可以取消勾选；会话到期时自动登录，主动退出会清除保存的密码。右上角菜单中的“登录设置”可单独管理。\n\n页面、样式和脚本已内置，启动无需下载网页。任务与预约直接连接后端，联网后更新；修改界面需升级 App。\n\nAndroid 8.0 及以上，并需支持现代网页功能的系统 WebView。")
                         .setPositiveButton("知道了",null).show(); break;
                 case 5: showRememberDialog();break;
                 default: break;

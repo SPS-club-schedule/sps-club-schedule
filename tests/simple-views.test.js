@@ -3,11 +3,11 @@ const assert=require('node:assert/strict');
 const {buildSync}=require('esbuild');
 const vm=require('node:vm');
 const {parseDeadline}=require('../shared/view');
-function fixture(role='owner'){
+function fixture(role='owner',bundled=false){
   const session=role==='guest'?null:{token:'a'.repeat(64),user:{id:'me',username:'view_test'},expiresAt:Date.now()+3600000};
   const routes=[];
   const ctx={exports:{},window:{matchMedia:()=>({matches:false})},setTimeout,clearTimeout,crypto:{randomUUID:()=> 'local-view-test'},sessionStorage:{getItem:key=>key==='sps-web-session'?JSON.stringify(session):null}};ctx.module={exports:ctx.exports};
-  vm.runInNewContext(buildSync({entryPoints:['client/simple.js'],bundle:true,format:'cjs',write:false}).outputFiles[0].text,ctx);
+  vm.runInNewContext(buildSync({entryPoints:['client/simple.js'],bundle:true,format:'cjs',write:false,define:{__BUNDLED_APP__:String(bundled)}}).outputFiles[0].text,ctx);
   const dueAt=parseDeadline('2026-11-06','10:00'),board={club:{id:'c'},me:{id:'me',role},members:[{id:'me',name:'<img src=x>',role}],tasks:[{_id:'root',title:'<script>alert(1)</script>',dueAt,participantIds:['me'],completions:{me:dueAt},mode:'individual',creatorId:'me'},{_id:'child',title:'预约教室',parentTaskId:'root',dueAt,startsAt:dueAt-3600000,endsAt:dueAt,participantIds:['me'],completions:{me:dueAt},sharedCompletion:null,mode:'individual',creatorId:'me'}]};
   const s={page:'simple',sync:{board,phase:'ready'},error:''};
   const simple=ctx.module.exports.createSimple({root:{querySelector:()=>null},getState:()=>s,render(){},go(path){routes.push(path);},perform(){},toast(){},confirmAction(){}});
@@ -77,4 +77,12 @@ test('guest simple calendar displays public bookings without private tasks, acco
   simple.action('simpleNew');assert.equal(routes.at(-1),'/auth?next=%2Fsimple');
   simple.action('simpleDetail','','booking:reservation');
   const detail=simple.view(s).split('<dialog')[1];assert.match(detail,/地点：物理楼/);assert.doesNotMatch(detail,/simpleEdit|simpleArchive/);
+});
+
+test('bundled guest and signed-in calendars keep login/settings but remove downloads and duplicate mode controls',()=>{
+  for(const role of ['guest','owner']){
+    const {simple,s}=fixture(role,true),html=simple.view(s);
+    assert.doesNotMatch(html,/下载.*App|分享包|simpleFull|simpleEnter/);
+    assert.match(html,role==='guest'?/data-action="simpleLogin"/:/账号设置/);
+  }
 });

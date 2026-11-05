@@ -50,10 +50,6 @@
   };
   proto.clear = function () { clear.call(this); if (this === store) persist(); };
   persist();
-  // A cached HTML shell can load while its version/API requests cannot. Keep
-  // the first offline launch in the local retry screen instead of unstyled HTML.
-  if (!navigator.onLine) send({ type: 'offline' });
-
   // Keep the choice across the site's form rerenders and failed attempts. No
   // password is read while typing or saved before authentication succeeds.
   let rememberLogin = true;
@@ -102,6 +98,7 @@
         if (url.pathname === '/api') action = body.action;
       }
     } catch { /* Unrecognized requests retain ordinary fetch behavior. */ }
+    if(submitted)send({type:'loginStarted'});
     const response = await originalFetch.call(this, input, options);
     try {
       if (url?.origin === 'https://sps-schedule.folderrewind.top' && response.ok) {
@@ -127,6 +124,7 @@
     return response;
   };
   window.addEventListener('sps:logged-out', () => send({ type: 'sessionExpired' }));
+  window.addEventListener('online',()=>{if(!valid(read()))send({type:'sessionExpired'});});
 
   // WebView cannot download a blob URL through Android's browser/download manager.
   // Use the system Save dialog for generated calendar/source files instead.

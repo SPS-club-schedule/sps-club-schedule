@@ -1,4 +1,5 @@
 import { syncLabel } from './api';
+import {bundledApp} from './platform';
 import { isAdmin,isSpeaker } from '../shared/permissions';
 export const e = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const button = (action, label, cls = 'primary', attrs = '') => `<button type="button" class="${cls}" data-action="${action}" ${attrs}>${label}</button>`;
@@ -7,4 +8,4 @@ export const error = s => s.error ? `<div class="error space" role="alert">${e(s
 export const busy = s => s.busy ? 'disabled' : '';
 export const field = (name, label, value, type = 'text', attrs = '') => `<div class="field"><label class="label" for="${name}">${label}</label><input id="${name}" name="${name}" type="${type}" value="${e(value)}" ${attrs}></div>`;
 export const syncRow = s => `<div class="row between sync-row" role="status"><span>${e(syncLabel(s.sync))}</span>${button('refresh', '刷新', 'plain', s.sync.phase === 'syncing' ? 'disabled' : '')}</div>`;
-export const nav = (active, board) => `<nav class="nav" aria-label="主要导航">${(isSpeaker(board?.me?.role)?[['mine','☑','我的待办'],['calendar','◷','我的日程']]:[['mine','☑','我的待办'],['board','▦','任务看板'],['templates','▤','模板库'],['experience','▣','经验档案'],['members','♧','社团成员'],...(isAdmin(board?.me?.role)?[['admin','⚙','管理后台']]:[])]).map(([route,icon,name]) => link('/'+route, `<span class="nav-icon">${icon}</span>${name}`, 'nav-item '+(active===route?'active':''))).join('')}${button('simpleEnter','◷ 极简模式','nav-item')}</nav>`;
+export const nav = (active, board) => `<nav class="nav" aria-label="主要导航">${(isSpeaker(board?.me?.role)?[['mine','☑','我的待办'],['calendar','◷','我的日程']]:[['mine','☑','我的待办'],['board','▦','任务看板'],['templates','▤','模板库'],['experience','▣','经验档案'],['members','♧','社团成员'],...(isAdmin(board?.me?.role)?[['admin','⚙','管理后台']]:[])]).map(([route,icon,name]) => link('/'+route, `<span class="nav-icon">${icon}</span>${name}`, 'nav-item '+(active===route?'active':''))).join('')}${bundledApp?'':button('simpleEnter','◷ 极简模式','nav-item')}</nav>`;

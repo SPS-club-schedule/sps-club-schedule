@@ -1,4 +1,5 @@
 import * as api from './api';
+import {bundledApp,bundledConfig} from './platform';
 import {createSimple} from './simple';
 import {simplePreferred,setSimplePreferred,preferredRoute} from './display-mode';
 import {authDestination,loginRedirect} from '../shared/navigation';
@@ -735,11 +736,15 @@ setInterval(()=>{if(!document.hidden&&s.page==='simple'&&!api.user()&&Date.now()
 setInterval(() => { if (!document.hidden && ['board','mine','calendar','task'].includes(s.page)) render(); },30000);
 async function start() {
   try {
-    const response = await fetch(new URL('./config.json', location.href.split('#')[0]), { cache:'no-store' });
-    if (!response.ok) throw new Error('配置加载失败，请刷新页面');
-    const config = await response.json(); api.configure(config.apiBase);configureBooking(config.bookingApiBase);
+    let config=bundledConfig;
+    if(!config){
+      const response = await fetch(new URL('./config.json', location.href.split('#')[0]), { cache:'no-store' });
+      if (!response.ok) throw new Error('配置加载失败，请刷新页面');
+      config = await response.json();
+    }
+    api.configure(config.apiBase);configureBooking(config.bookingApiBase);
     api.sync.setVisible(!document.hidden); api.sync.setOnline(navigator.onLine); await route();
-    startReleaseUpdates({safe:()=>!tutorial.active&&!guideDrafts.hasDraft(guideKey())&&!s.busy&&!s.recovery&&!s.resetLink&&!s.resetToken&&!s.experienceDocument?.editing&&!s.experienceFiles?.length&&!root.querySelector('form')&&!document.querySelector('dialog[open]')&&!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')});
+    if(!bundledApp)startReleaseUpdates({safe:()=>!tutorial.active&&!guideDrafts.hasDraft(guideKey())&&!s.busy&&!s.recovery&&!s.resetLink&&!s.resetToken&&!s.experienceDocument?.editing&&!s.experienceFiles?.length&&!root.querySelector('form')&&!document.querySelector('dialog[open]')&&!document.activeElement?.matches('input,textarea,select,[contenteditable="true"]')});
   } catch (error) { root.innerHTML = `<section class="page"><h1 class="h1">暂时无法连接</h1><p class="error">${views.e(error.message)}</p><button data-action="reload">重新加载</button></section>`; }
 }
 start();
