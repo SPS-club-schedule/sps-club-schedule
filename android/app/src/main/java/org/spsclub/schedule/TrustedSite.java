@@ -5,7 +5,10 @@ import java.net.URI;
 final class TrustedSite {
     static final String ORIGIN = "https://sps-club-schedule.github.io";
     static final String HOME = ORIGIN + "/sps-club-schedule/";
-    static final String START = HOME + (BuildConfig.SIMPLE_MODE ? "?mode=simple#/simple" : "");
+    static final String START = start("simple");
+    static String start(String mode) {
+        return HOME + ("full".equals(mode) ? "?mode=full#/mine" : "?mode=simple#/simple");
+    }
 
     static boolean isPage(String value) {
         try {

@@ -17,16 +17,7 @@ export { admin, adminEditor, resetPassword } from './admin-views';
 export { accountSettings } from './account-views';
 export { archives } from './archive-views';
 export {experience} from './experience';
-const androidVersion = '1.2.0';
-const androidPackage = './downloads/SPS-Schedule-' + androidVersion;
-const androidDownloads = `<div class="android-downloads">
-  <div><a class="secondary compact" href="${androidPackage}.apk" download>下载安卓 App</a>
-  <a class="plain small" href="${androidPackage}.zip" download>微信分享包（ZIP）</a></div>
-  <p class="hint">v${androidVersion} · 适用于 Android 8.0 及以上</p>
-  <div class="space"><a class="secondary compact" href="./downloads/SPS-Simple-1.0.0.apk" download>下载极简版 App</a>
-  <a class="plain small" href="./downloads/SPS-Simple-1.0.0.zip" download>极简版微信分享包（ZIP）</a></div>
-  <p class="hint">极简版 v1.0.0 · 只看日历 · 可与原 App 同时安装</p>
-</div>`;
+import {androidDownloads} from './downloads';
 const brand = `<div class="brand-mark">SPS</div><div class="eyebrow">BETTER TOGETHER</div><h1 class="h1 space">社团的每一件事，<br>一起完成。</h1><p class="muted space">安排任务，约定时间，让每一份参与都有回应。</p>`;
 const parentLink = t => t.parentTaskId && t.parentVisible!==false ? link('/task?id='+encodeURIComponent(t.parentTaskId),'↳ '+e(t.parentTitle),'parent-task-link small') : '';
 function subtasks(t, b, s) {
@@ -38,7 +29,7 @@ function subtasks(t, b, s) {
 export function auth(s) {
   if (s.recovery) return `<section class="page entry">${brand}<div class="card section"><h2 class="h2">保存你的账号恢复码</h2><p class="muted small">忘记密码时，可用它找回账号。请保存在只有你能访问的地方，仅显示这一次。</p><div class="invite-code space">${e(s.recovery)}</div>${button('copyRecovery','复制恢复码','secondary full space')}${button('continue','我已保存，进入社团 →','primary full space')}</div></section>`;
   const f = s.form, register = s.authMode === 'register', recover = s.authMode === 'recover';
-  return `<section class="page entry">${brand}<div class="chips section">${button('authMode','登录','chip '+(!register&&!recover?'active':''),'data-value="login"')}${button('authMode','注册并加入','chip '+(register?'active':''),'data-value="register"')}</div>
+  return `<section class="page entry">${link('/simple','← 先看日历','plain small')}${brand}<div class="chips section">${button('authMode','登录','chip '+(!register&&!recover?'active':''),'data-value="login"')}${button('authMode','注册并加入','chip '+(register?'active':''),'data-value="register"')}</div>
   <form data-form="auth" class="section">
     ${field('username','用户名',f.username,'text','required minlength="3" maxlength="30" pattern="[a-zA-Z0-9_]+" autocomplete="username" autocapitalize="none" placeholder="英文字母、数字或下划线"')}
     ${field('password',recover?'新密码':'密码',f.password,'password',`required minlength="10" maxlength="128" autocomplete="${register||recover?'new-password':'current-password'}" placeholder="至少10个字符"`)}

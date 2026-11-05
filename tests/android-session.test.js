@@ -138,3 +138,22 @@ test('registration and recovery save the verified new credential without a later
     assert.equal(p.messages.some(x=>x.type==='credentialsChanged'),false);
   }
 });
+const modeBundle=buildSync({entryPoints:['client/display-mode.js'],bundle:true,format:'iife',globalName:'mode',write:false}).outputFiles[0].text;
+test('display mode defaults to simple and persists through web logout and a fresh native document',()=>{
+  const fresh=page();fresh.run(modeBundle);assert.equal(fresh.run('mode.simplePreferred()'),true);
+  fresh.run('mode.setSimplePreferred(false)');assert.deepEqual(fresh.messages.at(-1),{type:'displayMode',mode:'full'});
+  assert.equal(fresh.run('mode.preferredRoute()'),'/mine');
+  fresh.run('sessionStorage.clear()');assert.equal(fresh.run('mode.simplePreferred()'),false);
+  const reopened=page({displayMode:'full'});reopened.run(modeBundle);
+  assert.equal(reopened.run('mode.preferredRoute()'),'/mine');
+  reopened.run('mode.setSimplePreferred(true)');assert.deepEqual(reopened.messages.at(-1),{type:'displayMode',mode:'simple'});
+  const next=page({displayMode:'simple'});next.run(modeBundle);assert.equal(next.run('mode.preferredRoute()'),'/simple');
+});
+test('native mode injection and persistence cannot introduce arbitrary routes or cross the bridge boundary',()=>{
+  const invalid=page({displayMode:'https://evil.test'});invalid.run(modeBundle);
+  assert.equal(invalid.run('mode.preferredRoute()'),'/simple');
+  invalid.run("localStorage.setItem('sps-display-mode','javascript:evil')");assert.equal(invalid.messages.some(m=>m.type==='displayMode'),false);
+  for(const options of [{foreign:true},{attachment:true},{frame:true}]){
+    const p=page({displayMode:'full'},options);p.run("localStorage.setItem('sps-display-mode','full')");assert.equal(p.messages.length,0);
+  }
+});

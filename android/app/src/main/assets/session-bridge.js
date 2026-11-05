@@ -13,6 +13,13 @@
     && typeof value.user?.id === 'string' && typeof value.user?.username === 'string';
   const read = () => { try { return JSON.parse(store.getItem(key)); } catch { return null; } };
   const send = value => window.SPSNative.postMessage(JSON.stringify(value));
+  const modeKey='sps-display-mode',validMode=value=>value==='simple'||value==='full';
+  // Native preferences survive WebView cache cleanup and logout.
+  if(validMode(initial.displayMode))set.call(window.localStorage,modeKey,initial.displayMode);
+  function persistMode(storage,name) {
+    if(storage!==window.localStorage||name!==modeKey)return;
+    const mode=storage.getItem(modeKey);if(validMode(mode))send({type:'displayMode',mode});
+  }
   if (!valid(read())) {
     remove.call(store, key);
     if (valid(initial.session)) {
@@ -35,6 +42,7 @@
   proto.setItem = function (name, value) {
     set.call(this, name, value);
     if (relevant(this, String(name))) persist();
+    persistMode(this,String(name));
   };
   proto.removeItem = function (name) {
     const changed = relevant(this, String(name)); remove.call(this, name);

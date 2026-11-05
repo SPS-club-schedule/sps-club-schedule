@@ -6,13 +6,13 @@ import {departmentLabel} from '../shared/departments';
 import {matchingParents,simpleEntries,simpleDays,blockLayout,QUARTER} from '../shared/simple-calendar';
 import {bindSimpleGestures} from './simple-gestures';
 import {bookingPage} from './booking';
+import {simplePreferred,setSimplePreferred} from './display-mode';
+import {androidPackage} from './downloads';
+export {simplePreferred,setSimplePreferred} from './display-mode';
 
 const read=(key,fallback)=>{try{return localStorage.getItem(key)??fallback;}catch{return fallback;}};
 const write=(key,value)=>{try{localStorage.setItem(key,value);}catch{}};
 const key=()=>`sps-simple:${api.user()?.id||'guest'}`;
-const nativeDefault=()=>new URL(location.href).searchParams.get('mode')==='simple';
-export const simplePreferred=()=>read(key(),nativeDefault()?'true':'false')==='true';
-export const setSimplePreferred=value=>write(key(),String(value));
 const localDate=time=>{const p=parts(time);return p.date+'T'+p.time;};
 const parseLocal=value=>{const [date,time]=String(value||'').split('T');return parseDeadline(date,time);};
 const label=time=>parts(time).time;
@@ -28,10 +28,12 @@ export function createSimple({root,getState,render,go,perform,toast,confirmActio
     ui.owner=api.user()?.id;ui.editor=null;ui.detail=null;ui.account=null;ui.prompt=false;
     ui.zoom=Math.max(10,Math.min(44,Number(read(key()+':zoom','20'))||20));
     const entry=++ui.entry,owner=ui.owner;
+    if(!api.user())return;
     try {const result=await api.accountSettings();if(state().page!=='simple'||entry!==ui.entry||owner!==api.user()?.id)return;ui.account=result.account;ui.prompt=result.account.emailNotificationsEnabled!==false;render();}
     catch(error){if(state().page==='simple'&&entry===ui.entry){state().error='邮件偏好暂未载入，可在账号设置中关闭提醒：'+error.message;render();}}
   }
   function newTask(range) {
+    if(!api.user()){go('/auth?next=%2Fsimple');return;}
     if(board()?.me?.role==='speaker')return;
     const start=range?.startsAt??(ui.date===parts(Date.now()).date?Math.ceil((Date.now()+QUARTER)/QUARTER)*QUARTER:parseDeadline(ui.date,'09:00')); 
     const end=range?.endsAt??start+3600000;
@@ -39,6 +41,7 @@ export function createSimple({root,getState,render,go,perform,toast,confirmActio
     state().error='';render();
   }
   function editTask(id) {
+    if(!api.user()||!board()?.club)return;
     const task=board().tasks.find(t=>t._id===id);if(!task||!taskView(task,board()).canManage)return;
     const parent=task.parentTaskId?board().tasks.find(t=>t._id===task.parentTaskId):null;
     ui.detail=null;ui.editor={id,revision:task.revision,major:parent?.title||task.title,minor:parent?task.title:'',child:!!parent,start:localDate(hasDuration(task)?task.startsAt:task.dueAt),end:localDate(hasDuration(task)?task.endsAt:task.dueAt),participantIds:[...task.participantIds]};
@@ -64,26 +67,26 @@ export function createSimple({root,getState,render,go,perform,toast,confirmActio
     return `<dialog class="simple-dialog" data-simple-dialog aria-labelledby="simple-detail-title"><header class="row between"><h2 id="simple-detail-title">${e(entry.major)}</h2>${button('simpleClose','×','simple-icon','aria-label="关闭"')}</header>${entry.minor?`<h3 class="simple-subtitle">${entry.external?'预约 · ':''}${e(entry.minor)}</h3>`:''}<p class="simple-detail-time">${e(localDate(entry.startsAt).replace('T',' '))}${entry.kind==='deadline'?' · DDL':' — '+e(localDate(entry.endsAt).replace('T',' '))}</p><p class="small">${entry.external?'地点：'+e(entry.location||'未定'):'负责人：'+e(entry.people)}</p>${error(s)}${entry.external?`<footer class="simple-dialog-actions"><a class="secondary" href="${bookingPage}" data-action="enterBooking">在物院社团预约中查看 ↗</a></footer>`:manageable?`<footer class="simple-dialog-actions">${button('simpleEdit','编辑','primary',`data-id="${e(task._id)}"`)}${button('simpleArchive','移除日程','plain',`data-id="${e(task._id)}"`)}</footer>`:''}</dialog>`;
   }
   function view(s) {
-    const b=s.sync.board;
-    if(!b?.club)return `<main class="simple-loading"><h1>SPS 极简日程</h1><p>${s.sync.phase==='error'?e(s.sync.message):'正在载入日程…'}</p>${button('refresh','重新加载','secondary')}<a href="#/entry">选择社团</a></main>`;
-    const days=simpleDays(ui.date,ui.mode),entries=simpleEntries(b,ui.scope=selectedScope(b.me,ui.scope),s.booking?.activities||[]),canCreate=b.me.role!=='speaker';
+    const guest=!api.user(),b=guest?null:s.sync.board;
+    if(!guest&&!b?.club)return `<main class="simple-loading"><h1>SPS 极简日程</h1><p>${s.sync.phase==='error'?e(s.sync.message):'正在载入日程…'}</p>${button('refresh','重新加载','secondary')}<a href="#/entry">选择社团</a></main>`;
+    const days=simpleDays(ui.date,ui.mode),entries=simpleEntries(b,ui.scope=selectedScope(b?.me,ui.scope),s.booking?.activities||[]),canCreate=!guest&&b.me.role!=='speaker';
     const cols=`--days:${days.length};--quarter:${ui.zoom}px`;
     const taskButton=(entry,cls,style='')=>`<button type="button" class="${cls}${entry.external?' simple-booking':''}" data-action="simpleDetail" data-id="${e(entry.key)}" style="${style}" aria-label="${e((entry.external?'预约 · ':'')+entry.major+(entry.minor?' · '+entry.minor:'')+'，'+label(entry.startsAt)+(entry.kind==='deadline'?' DDL':' 至 '+label(entry.endsAt))+(entry.people?'，'+entry.people:''))}"><strong>${e(entry.major)}</strong>${entry.minor?`<span>${entry.external?'预约 · ':''}${e(entry.minor)}</span>`:''}<small>${label(entry.startsAt)}${entry.kind==='deadline'?' · DDL':'–'+label(entry.endsAt)}</small></button>`;
     const booking=s.booking||{};
-    const bookingStatus=b.me.role==='speaker'?'':`<div class="simple-booking-status" role="status"><span><i aria-hidden="true"></i>预约时段 · ${booking.error?e(booking.error)+(booking.activities?'，保留上次内容':''):booking.activities?`${e(booking.from)} 至 ${e(booking.to)}`:'正在加载…'}</span>${button('refreshBooking',s.bookingLoading?'更新中…':'更新','plain small',s.bookingLoading?'disabled':'')}</div>`;
-    return `<main class="simple-shell" style="${cols}"><header class="simple-header"><a href="#/simple" class="simple-brand">SPS<span>极简日程</span></a><div class="row">${button('simpleFull','完整模式','plain small')}<a href="#/account" class="simple-settings" aria-label="账号设置">⚙</a></div></header>
-    ${ui.prompt?`<aside class="simple-mail" role="status"><div><strong>建议关闭任务邮件提醒</strong><p>极简模式不标记完成。关闭后，你的逾期也不会触发给部门负责人的邮件。</p></div><div class="row">${button('simpleMailOff','关闭提醒','secondary compact',s.busy?'disabled':'')}${button('simpleMailKeep','保留提醒','plain small',s.busy?'disabled':'')}</div></aside>`:''}
-    <section class="simple-toolbar" aria-label="日历工具"><div class="row"><button class="simple-icon" type="button" data-action="simpleMove" data-value="-1" aria-label="上一页">‹</button><label class="simple-date-label"><span class="sr-only">选择日期</span><input type="date" name="simpleDate" aria-label="选择日期" value="${ui.date}"></label><button class="simple-icon" type="button" data-action="simpleMove" data-value="1" aria-label="下一页">›</button>${button('simpleToday','今天','secondary compact')}</div><div class="row simple-tools"><select name="simpleScope" aria-label="日程范围">${calendarPolicy(b.me).scopes.map(scope=>`<option value="${scope}" ${scope===ui.scope?'selected':''}>${e(scopeLabel(scope))}</option>`).join('')}</select><select name="simpleMode" aria-label="日历视图">${[['day','日'],['three','3天'],['week','周']].map(([value,name])=>`<option value="${value}" ${ui.mode===value?'selected':''}>${name}</option>`).join('')}</select>${button('simpleZoom','−','simple-icon','data-value="-4" aria-label="缩小时间格"')}${button('simpleZoom','＋','simple-icon','data-value="4" aria-label="放大时间格"')}${canCreate?button('simpleNew','＋ 新建','primary compact'):''}</div></section>
+    const bookingStatus=b?.me?.role==='speaker'?'':`<div class="simple-booking-status" role="status"><span><i aria-hidden="true"></i>预约时段 · ${booking.error?e(booking.error)+(booking.activities?'，保留上次内容':''):booking.activities?`${e(booking.from)} 至 ${e(booking.to)}`:'正在加载…'}</span>${button('refreshBooking',s.bookingLoading?'更新中…':'更新','plain small',s.bookingLoading?'disabled':'')}</div>`;
+    return `<main class="simple-shell" style="${cols}"><header class="simple-header"><a href="#/simple" class="simple-brand">SPS<span>极简日程</span></a><div class="row">${button('simpleFull','完整模式','plain small')}${guest?button('simpleLogin','登录','secondary compact'):'<a href="#/account" class="simple-settings" aria-label="账号设置">⚙</a>'}</div></header>
+    ${!guest&&ui.prompt?`<aside class="simple-mail" role="status"><div><strong>建议关闭任务邮件提醒</strong><p>极简模式不标记完成。关闭后，你的逾期也不会触发给部门负责人的邮件。</p></div><div class="row">${button('simpleMailOff','关闭提醒','secondary compact',s.busy?'disabled':'')}${button('simpleMailKeep','保留提醒','plain small',s.busy?'disabled':'')}</div></aside>`:''}
+    <section class="simple-toolbar" aria-label="日历工具"><div class="row"><button class="simple-icon" type="button" data-action="simpleMove" data-value="-1" aria-label="上一页">‹</button><label class="simple-date-label"><span class="sr-only">选择日期</span><input type="date" name="simpleDate" aria-label="选择日期" value="${ui.date}"></label><button class="simple-icon" type="button" data-action="simpleMove" data-value="1" aria-label="下一页">›</button>${button('simpleToday','今天','secondary compact')}</div><div class="row simple-tools">${guest?'<span class="simple-public-label">公开预约</span>':`<select name="simpleScope" aria-label="日程范围">${calendarPolicy(b.me).scopes.map(scope=>`<option value="${scope}" ${scope===ui.scope?'selected':''}>${e(scopeLabel(scope))}</option>`).join('')}</select>`}<select name="simpleMode" aria-label="日历视图">${[['day','日'],['three','3天'],['week','周']].map(([value,name])=>`<option value="${value}" ${ui.mode===value?'selected':''}>${name}</option>`).join('')}</select>${button('simpleZoom','−','simple-icon','data-value="-4" aria-label="缩小时间格"')}${button('simpleZoom','＋','simple-icon','data-value="4" aria-label="放大时间格"')}${canCreate?button('simpleNew','＋ 新建','primary compact'):''}</div></section>
     ${bookingStatus}${s.error&&!ui.editor&&!ui.detail?error(s):''}<div class="simple-calendar-body"><div class="simple-day-head"><div class="simple-zone">GMT+8</div>${days.map(day=>`<div class="${day.today?'today':''}"><strong>${Number(day.date.slice(5,7))}/${Number(day.date.slice(8))}</strong><span>周${day.weekday}</span></div>`).join('')}</div>
     <section class="simple-deadlines" aria-label="DDL 日程"><div class="simple-ddl-label">DDL</div>${days.map(day=>`<div>${entries.filter(t=>t.kind==='deadline'&&t.startsAt>=day.start&&t.startsAt<day.start+86400000).map(t=>taskButton(t,'simple-ddl')).join('')||'<span class="simple-no-ddl">—</span>'}</div>`).join('')}</section>
     <div class="simple-scroll" data-scroll-key="simple-timeline"><div class="simple-grid"><div class="simple-hours" aria-hidden="true">${Array.from({length:24},(_,i)=>`<span style="top:calc(${i*4} * var(--quarter))">${String(i).padStart(2,'0')}:00</span>`).join('')}</div>${days.map(day=>`<div class="simple-day" data-simple-date="${day.date}" ${canCreate?'tabindex="0" role="group"':''} aria-label="${day.date} 日程${canCreate?'，长按拖动创建；键盘回车创建':''}">${blockLayout(entries,day).map(t=>taskButton(t,'simple-block',`top:calc(${t.start} * var(--quarter));height:calc(${Math.max(1,t.end-t.start)} * var(--quarter) - 2px);left:calc(${t.lane/t.lanes*100}% + 2px);width:calc(${100/t.lanes}% - 4px)`)).join('')}${day.today?`<div class="simple-now" style="top:calc(${(Date.now()-day.start)/QUARTER} * var(--quarter))" aria-hidden="true"></div>`:''}</div>`).join('')}</div></div></div>
-    <footer class="simple-foot"><span>${canCreate?'长按拖动建日程 · 双指缩放 · 15分钟一格':'双指缩放 · 15分钟一格'}</span><span>${e(api.syncLabel(s.sync))} ${button('refresh','刷新','plain small')}</span></footer>${editorView(b,s)}${detailView(b,s)}</main>`;
+    <footer class="simple-foot"><span>${canCreate?'长按拖动建日程 · 双指缩放 · 15分钟一格':'双指缩放 · 15分钟一格'}</span><span>${guest?'无需登录浏览':e(api.syncLabel(s.sync))} ${button('refresh','刷新','plain small')}${guest?` · <a href="${androidPackage}.apk" download>下载 App</a>`:''}</span></footer>${guest?'':editorView(b,s)}${detailView(b,s)}</main>`;
   }
   function beforeRender() {unbind?.();unbind=null;const scroll=root.querySelector('.simple-scroll');if(scroll)scrollTop=scroll.scrollTop;}
   function afterRender() {
     const shell=root.querySelector('.simple-shell');if(!shell)return;
     const scroll=root.querySelector('.simple-scroll');
-    if(scroll){scroll.scrollTop=scrollTop??ui.zoom*4*8;unbind=bindSimpleGestures({scroll,shell,getZoom:()=>ui.zoom,setZoom:saveZoom,onCreate:newTask,canCreate:()=>board()?.me.role!=='speaker'});}
+    if(scroll){scroll.scrollTop=scrollTop??ui.zoom*4*8;unbind=bindSimpleGestures({scroll,shell,getZoom:()=>ui.zoom,setZoom:saveZoom,onCreate:newTask,canCreate:()=>!!api.user()&&!!board()?.club&&board().me.role!=='speaker'});}
     const dialog=root.querySelector('[data-simple-dialog]');if(dialog){dialog.showModal();dialog.addEventListener('cancel',event=>{event.preventDefault();if(!state().busy){ui.editor=null;ui.detail=null;state().error='';render();}});}
   }
   function input(event) {
@@ -103,6 +106,7 @@ export function createSimple({root,getState,render,go,perform,toast,confirmActio
   }
   function submit(event) {
     if(event.target.dataset.form!=='simpleTask')return false;
+    if(!api.user()||!ui.editor){go('/auth?next=%2Fsimple');return true;}
     const f=ui.editor;
     perform(async()=>{
       const input={major:f.major,minor:f.minor,startsAt:parseLocal(f.start),endsAt:parseLocal(f.end),participantIds:f.participantIds,parentTaskId:f.parentTaskId,requestId:f.requestId,taskId:f.id,revision:f.revision,clubId:board().club.id};
@@ -112,6 +116,7 @@ export function createSimple({root,getState,render,go,perform,toast,confirmActio
   }
   function action(action,value,id) {
     if(!action.startsWith('simple'))return false;
+    if(action==='simpleLogin')go('/auth?next=%2Fsimple');
     if(action==='simpleFull'){setSimplePreferred(false);go('/mine');}
     if(action==='simpleEnter'){setSimplePreferred(true);go('/simple');}
     if(action==='simpleNew')newTask();
@@ -126,5 +131,5 @@ export function createSimple({root,getState,render,go,perform,toast,confirmActio
     if(action==='simpleArchive')perform(async()=>{const task=board().tasks.find(t=>t._id===id);const count=board().tasks.filter(t=>t.parentTaskId===id).length;if(!await confirmAction('移除这项日程？',count?`「${task.title}」及其下的 ${count} 项日程都会被移除，可由管理员恢复。`:'移除后不再显示，可由管理员恢复。','移除',true))return;await api.call('archiveTask',{taskId:id});ui.detail=null;toast('日程已移除');});
     return true;
   }
-  return {enter,view,beforeRender,afterRender,input,submit,action,interacting:()=>!!unbind?.active(),hasDraft:()=>!!ui.editor};
+  return {enter,view,beforeRender,afterRender,input,submit,action,discardDraft:()=>{ui.editor=null;},interacting:()=>!!unbind?.active(),hasDraft:()=>!!ui.editor};
 }

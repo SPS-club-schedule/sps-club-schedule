@@ -1,5 +1,7 @@
 import * as api from './api';
-import {createSimple,simplePreferred} from './simple';
+import {createSimple} from './simple';
+import {simplePreferred,setSimplePreferred,preferredRoute} from './display-mode';
+import {authDestination,loginRedirect} from '../shared/navigation';
 import * as views from './views';
 import {emailReminder} from './account-views';
 import { parts, taskView, parseDeadline } from '../shared/view';
@@ -53,14 +55,6 @@ let stop = null, generation = 0, inviteKey = '', adminLoad = 0;
 let activeRouteHash=location.hash,documentPreviewTimer;
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
 const simple=createSimple({root,getState:()=>s,render,go,perform,toast,confirmAction});
-function authDestination(value) {
-  if(value==='experience'||value==='/experience')return '/experience';
-  try {
-    const url=new URL(value,'https://local.invalid');
-    if(url.origin==='https://local.invalid'&&url.pathname==='/task'&&/^[a-zA-Z0-9_-]{1,120}$/.test(url.searchParams.get('id')||'')&&/^[a-zA-Z0-9_-]{1,120}$/.test(url.searchParams.get('club')||''))return '/task?id='+encodeURIComponent(url.searchParams.get('id'))+'&club='+encodeURIComponent(url.searchParams.get('club'));
-  }catch{}
-  return '';
-}
 function go(path) { if (location.hash === '#' + path) route(); else location.hash = path; }
 function render() {
   if(s.page==='simple'&&simple.interacting())return;
@@ -99,7 +93,7 @@ function render() {
   const agenda = root.querySelector('.calendar-agenda-list');
   if (agenda) { agenda.scrollTop = agendaScroll || 0; if (agendaFocus) agenda.focus({ preventScroll: true }); }
   window.scrollTo(0, scroll);
-  if(s.page!=='simple'&&!simplePreferred())tutorial.update(s,api.user()?.id);
+  if(tutorial.active||(s.page!=='simple'&&!simplePreferred()))tutorial.update(s,api.user()?.id);
 }
 function toast(message) {
   const el = document.getElementById('toast'); el.textContent = message; el.hidden = false;
@@ -184,11 +178,11 @@ function receive(state) {
   render();
 }
 async function loadBooking() {
-  if(isSpeaker(s.sync.board?.me?.role)||s.bookingLoading || !s.sync.board?.club || document.hidden)return;
-  const ticket=generation,clubId=s.sync.board.club.id;
+  if(isSpeaker(s.sync.board?.me?.role)||s.bookingLoading || s.page!=='simple'&&!s.sync.board?.club || document.hidden)return;
+  const ticket=generation,clubId=s.sync.board?.club?.id;
   s.bookingLoading=true;s.bookingCheckedAt=Date.now();
   try {
-    const [data,status]=await Promise.all([otherActivities({includeSchedule:true}),api.bookingStatus(clubId).catch(()=>null)]);
+    const [data,status]=await Promise.all([otherActivities({includeSchedule:true}),api.user()&&clubId?api.bookingStatus(clubId).catch(()=>null):null]);
     if(ticket!==generation)return;
     s.booking={...data,sync:status};
   } catch(error) {if(ticket===generation)s.booking={...s.booking,error:error.message};}
@@ -204,11 +198,12 @@ async function route() {
   }
   activeRouteHash=location.hash;
   const ticket = ++generation; if (stop) stop(); stop = null;
-  const url = new URL((location.hash.slice(1) || '/mine'), 'https://local.invalid');
+  const url = new URL((location.hash.slice(1) || preferredRoute()), 'https://local.invalid');
   const page = url.pathname.slice(1), invitation = url.searchParams.get('invite');
-  if (!api.user() && !['auth','reset','experience'].includes(page)) { const next=authDestination(url.pathname+url.search);go('/auth'+(next?'?next='+encodeURIComponent(next):'')); return; }
-  if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : authDestination(url.searchParams.get('next'))||'/mine'); return; }
-  if(api.user()&&['board','mine','calendar'].includes(page)&&simplePreferred()){go('/simple');return;}
+  const login=loginRedirect(url.pathname+url.search,!!api.user());
+  if(login){go(login);return;}
+  if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : authDestination(url.searchParams.get('next'))||preferredRoute()); return; }
+  if(['board','mine','calendar'].includes(page))setSimplePreferred(false);
   if(api.user()&&page==='task'&&authDestination(url.pathname+url.search)&&url.searchParams.get('club')!==api.clubId())api.setClub(url.searchParams.get('club'));
   if(['board','mine','templates'].includes(page))workspaceUi.context=page;
   if(page==='calendar')workspaceUi.calendarOpen=true;
@@ -226,6 +221,7 @@ async function route() {
   }
   if(page==='simple')simple.enter();
   inviteKey = ''; window.scrollTo(0,0); render();
+  if(page==='simple'&&!api.user()){s.sync={board:null,phase:'idle'};loadBooking();return;}
   if (['simple','board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(page)) { stop = api.sync.watch(receive); return; }
   if (page === 'auth' || page==='reset') return;
   if(page==='experience') {
@@ -469,7 +465,7 @@ root.addEventListener('submit', event => {
       const result = await api.authenticate(s.authMode, { ...data, mode: s.joinMode });
       s.form.password = ''; s.form.recoveryCode = '';
       if (result.recoveryCode) { s.recovery = result.recoveryCode; render(); }
-      else go(data.invite ? '/entry?invite='+encodeURIComponent(data.invite) : !result.user.emailVerified?'/account':s.afterAuth||'/mine');
+      else go(data.invite ? '/entry?invite='+encodeURIComponent(data.invite) : s.afterAuth||(!result.user.emailVerified?'/account':preferredRoute()));
     }
     if (kind==='resetPassword') {
       if (data.password!==data.confirmPassword) throw new Error('两次输入的密码不一致');
@@ -504,7 +500,7 @@ root.addEventListener('submit', event => {
     }
     if (kind === 'club') {
       const result = await api.call(s.joinMode==='create'?'createClub':'joinClub', { nickname: data.nickname, name: data.name, token: data.invite.trim(), requestId: s.requestId });
-      api.setClub(result.clubId); go('/mine'); if (result.department) toast('已加入'+departmentLabel(result.department));
+      api.setClub(result.clubId); go(preferredRoute()); if (result.department) toast('已加入'+departmentLabel(result.department));
     }
     if (kind === 'task') {
       if (data.hasDuration && data.endFollowsDuration) followDuration(data);
@@ -536,6 +532,7 @@ root.addEventListener('click', event => {
   const el = event.target.closest('[data-action]'); if (!el || el.disabled) return;
   const { action, value, id } = el.dataset;
   if (action === 'enterBooking') {
+    if(!api.user())return;
     event.preventDefault();
     if (!s.busy) perform(() => enterBooking(api.bookingEntryCode));
     return;
@@ -637,8 +634,8 @@ root.addEventListener('click', event => {
   if (action === 'department') { chooseDepartment(s.form,value,s.editBoard.members); render(); return; }
   if (action === 'participant') { toggleParticipant(s.form,id,s.editBoard.members); render(); return; }
   if (action === 'allMembers') { const ids=resolveParticipants(s.form,s.editBoard.members),core=s.editBoard.members.filter(m=>!isSpeaker(m.role));s.form.participantIds = core.length===ids.length&&core.every(m=>ids.includes(m.id)) ? [] : core.map(m=>m.id);s.form.participantDepartment=''; render(); return; }
-  if (action === 'chooseClub') { api.setClub(id); go('/mine'); return; }
-  if (action === 'continue') { s.recovery = ''; go(api.user()?.emailVerified?'/mine':'/account'); return; }
+  if (action === 'chooseClub') { api.setClub(id); go(preferredRoute()); return; }
+  if (action === 'continue') { s.recovery = ''; go(s.afterAuth||(api.user()?.emailVerified?preferredRoute():'/account')); return; }
   if (action === 'copyRecovery') { copy(s.recovery); return; }
   if (action === 'archiveType' && ['tasks','templates'].includes(value)) { s.archiveType=value; s.search=''; render(); return; }
   if (action === 'accountRecoverySaved') { s.recovery=''; render(); window.scrollTo(0,0); return; }
@@ -674,7 +671,7 @@ root.addEventListener('click', event => {
       if(ticket!==generation)return;
       s.account=result.account;toast('验证码已加入发送队列，请稍候查看邮箱');
     }
-    if (action === 'refresh') { await api.bootstrap({ force: true }); if(adminPage()&&!s.adminLoading) await loadAdmin(); }
+    if (action === 'refresh') { if(!api.user()&&s.page==='simple'){await loadBooking();return;} await api.bootstrap({ force: true }); if(adminPage()&&!s.adminLoading) await loadAdmin(); }
     if (action==='adminDelete') {
       const target=s.adminTarget, clubId=s.sync.board.club.id, adminPassword=s.form.adminPassword;
       if (!target?.canDeleteAccount) throw new Error(target?.deleteAccountRestriction || '没有删除此账号的权限');
@@ -715,15 +712,25 @@ root.addEventListener('click', event => {
         s.invites=await api.getInvite(s.sync.board);
       }
     }
-    if (action === 'logout') { await api.logout(); go('/auth'); }
+    if (action === 'logout') { await api.logout(); go(preferredRoute()); }
   });
 });
 window.addEventListener('hashchange', route);
 window.addEventListener('beforeunload',event=>{if(documentDirty(s.experienceDocument)||guideDrafts.hasDraft(guideKey())){event.preventDefault();event.returnValue='';}});
-window.addEventListener('sps:logged-out', () => go(s.page==='experience'?experienceRoute(s.experiencePath):'/auth'));
-window.addEventListener('online', () => api.sync.setOnline(true));
+window.addEventListener('sps:logged-out', () => go(s.page==='experience'?experienceRoute(s.experiencePath):simplePreferred()?'/simple':'/auth?next=%2Fmine'));
+window.addEventListener('sps:select-mode', async event => {
+  if(!['simple','full'].includes(event.detail))return;
+  if(s.busy){toast('请等待当前操作完成后再切换模式');return;}
+  if(simple.hasDraft()||documentDirty(s.experienceDocument)||['edit','template-edit','admin-edit'].includes(s.page)){
+    if(!await confirmAction('切换显示模式？','尚未保存的编辑会丢失。','切换模式'))return;
+    simple.discardDraft();s.experienceDocument=null;
+  }
+  setSimplePreferred(event.detail==='simple');go(preferredRoute());
+});
+window.addEventListener('online', () => {api.sync.setOnline(true);if(s.page==='simple'&&!api.user())loadBooking();});
 window.addEventListener('offline', () => api.sync.setOnline(false));
-document.addEventListener('visibilitychange', () => api.sync.setVisible(!document.hidden));
+document.addEventListener('visibilitychange', () => {api.sync.setVisible(!document.hidden);if(!document.hidden&&s.page==='simple'&&!api.user()&&Date.now()-(s.bookingCheckedAt||0)>30000)loadBooking();});
+setInterval(()=>{if(!document.hidden&&s.page==='simple'&&!api.user()&&Date.now()-(s.bookingCheckedAt||0)>30000)loadBooking();},30000);
 // Deadline labels use local time and never initiate a request.
 setInterval(() => { if (!document.hidden && ['board','mine','calendar','task'].includes(s.page)) render(); },30000);
 async function start() {

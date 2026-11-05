@@ -6,7 +6,9 @@ public class TrustedSiteTest {
     @Test public void onlyEntryDocumentCanUseVault() {
         assertTrue(TrustedSite.isPage(TrustedSite.HOME));
         assertTrue(TrustedSite.isPage(TrustedSite.START));
-        assertEquals(BuildConfig.SIMPLE_MODE, TrustedSite.START.endsWith("?mode=simple#/simple"));
+        assertTrue(TrustedSite.START.endsWith("?mode=simple#/simple"));
+        assertEquals(TrustedSite.HOME+"?mode=full#/mine",TrustedSite.start("full"));
+        assertEquals(TrustedSite.START,TrustedSite.start("invalid"));
         assertTrue(TrustedSite.isPage(TrustedSite.HOME + "?v=1#/board"));
         assertTrue(TrustedSite.isPage(TrustedSite.HOME + "index.html#/experience"));
         String[] blocked = {

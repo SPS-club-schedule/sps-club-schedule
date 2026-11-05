@@ -4,13 +4,15 @@ const {buildSync}=require('esbuild');
 const vm=require('node:vm');
 const {parseDeadline}=require('../shared/view');
 function fixture(role='owner'){
-  const ctx={exports:{},window:{matchMedia:()=>({matches:false})},setTimeout,clearTimeout,crypto:{randomUUID:()=> 'local-view-test'},sessionStorage:{getItem:()=>null}};ctx.module={exports:ctx.exports};
+  const session=role==='guest'?null:{token:'a'.repeat(64),user:{id:'me',username:'view_test'},expiresAt:Date.now()+3600000};
+  const routes=[];
+  const ctx={exports:{},window:{matchMedia:()=>({matches:false})},setTimeout,clearTimeout,crypto:{randomUUID:()=> 'local-view-test'},sessionStorage:{getItem:key=>key==='sps-web-session'?JSON.stringify(session):null}};ctx.module={exports:ctx.exports};
   vm.runInNewContext(buildSync({entryPoints:['client/simple.js'],bundle:true,format:'cjs',write:false}).outputFiles[0].text,ctx);
   const dueAt=parseDeadline('2026-11-06','10:00'),board={club:{id:'c'},me:{id:'me',role},members:[{id:'me',name:'<img src=x>',role}],tasks:[{_id:'root',title:'<script>alert(1)</script>',dueAt,participantIds:['me'],completions:{me:dueAt},mode:'individual',creatorId:'me'},{_id:'child',title:'预约教室',parentTaskId:'root',dueAt,startsAt:dueAt-3600000,endsAt:dueAt,participantIds:['me'],completions:{me:dueAt},sharedCompletion:null,mode:'individual',creatorId:'me'}]};
   const s={page:'simple',sync:{board,phase:'ready'},error:''};
-  const simple=ctx.module.exports.createSimple({root:{querySelector:()=>null},getState:()=>s,render(){},go(){},perform(){},toast(){},confirmAction(){}});
+  const simple=ctx.module.exports.createSimple({root:{querySelector:()=>null},getState:()=>s,render(){},go(path){routes.push(path);},perform(){},toast(){},confirmAction(){}});
   simple.input({type:'change',target:{name:'simpleDate',value:'2026-11-06'}});
-  return {simple,s};
+  return {simple,s,routes};
 }
 test('simple calendar renders completed records without state/priority/hierarchy controls and escapes titles',()=>{
   const {simple,s}=fixture();const html=simple.view(s);
@@ -63,4 +65,16 @@ test('schedule-origin booking outside my assignments still opens its read-only d
   assert.match(simple.view(s).split('<dialog')[1],/data-action="enterBooking"/);
   simple.action('simpleClose');simple.input({type:'change',target:{name:'simpleScope',value:'club'}});
   assert.doesNotMatch(simple.view(s),/simple-block simple-booking/);
+});
+
+test('guest simple calendar displays public bookings without private tasks, account or write controls',async()=>{
+  const {simple,s,routes}=bookingFixture('guest');await simple.enter();
+  const html=simple.view(s);
+  assert.match(html,/预约 · SPS/);assert.match(html,/data-action="simpleLogin"/);assert.match(html,/公开预约/);
+  assert.doesNotMatch(html,/data-action="simpleNew"|simplePerson|name="simpleScope"|账号设置|关闭任务邮件|准备同步|&lt;script&gt;alert/);
+  simple.action('simpleLogin');assert.equal(routes.at(-1),'/auth?next=%2Fsimple');
+  simple.action('simpleFull');assert.equal(routes.at(-1),'/mine');
+  simple.action('simpleNew');assert.equal(routes.at(-1),'/auth?next=%2Fsimple');
+  simple.action('simpleDetail','','booking:reservation');
+  const detail=simple.view(s).split('<dialog')[1];assert.match(detail,/地点：物理楼/);assert.doesNotMatch(detail,/simpleEdit|simpleArchive/);
 });

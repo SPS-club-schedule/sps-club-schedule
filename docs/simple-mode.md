@@ -1,10 +1,13 @@
-# 极简日程与 Android 极简版
+# 极简日程与统一 Android App
 
-已于 2026-11-05 发布：[打开极简日程](https://sps-club-schedule.github.io/sps-club-schedule/?mode=simple#/simple) · [Android APK](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Simple-1.0.0.apk) · [微信分享 ZIP](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Simple-1.0.0.zip)。
+已于 2026-11-05 发布：[打开极简日程](https://sps-club-schedule.github.io/sps-club-schedule/?mode=simple#/simple) · [Android APK](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Schedule-1.3.0.apk) · [微信分享 ZIP](https://sps-club-schedule.github.io/sps-club-schedule/downloads/SPS-Schedule-1.3.0.zip)。
 
-极简模式与完整模式共用账号、社团和任务数据。完整页面导航的「极简模式」进入 `#/simple`，右上角「完整模式」切回。浏览器按账号记住本机模式；Android 极简版默认进入极简模式，用户仍可切换。
+极简模式与完整模式共用账号、社团和任务数据。完整页面导航的「极简模式」进入 `#/simple`，右上角「完整模式」切回。网站和 App 首次默认极简模式，按设备记住之后选择的模式；退出登录或重新打开后继续使用该模式。
 
 ## 使用
+
+- 未登录可直接浏览物院社团预约的公开日历，点击右上角「登录」后回到极简日历，加载本人可访问的任务。游客不会请求私人任务或账号偏好接口，也不会显示创建、编辑、负责人或邮件设置。
+- 点击「完整模式」时若未登录，先登录再进入完整模式；登录页提供「先看日历」返回入口。已登录的任务权限不变。
 
 - 只呈现日历，支持日、3天、周视图。DDL 在顶部，持续日程在时间轴中。包含已完成任务，但不显示完成、逾期、优先级或层级状态，也没有完成按钮。
 - 叠加物院社团预约的公开活动时段，以暖黄色显示社团和活动名；点击查看起止时间、地点，并可进入预约网站。只读预约不提供编辑、移除或完成按钮。预约跟随日程同步刷新，也可点「更新」；网络失败时保留上次结果并提示。公开窗口为北京时间今天至两个月后的对应日期（含），不含课程。
@@ -35,15 +38,17 @@
 
 ## Android
 
-独立包名 `org.spsclub.schedule.simple`，可与原 `org.spsclub.schedule` 同时安装。沿用已有的 WebView 安全边界、加密会话、可选记住密码、文件选择及下载。两个 App 的本机登录数据隔离，服务器账号和任务共用。
+从 1.3.0 起统一为「SPS 社团日程」，包名 `org.spsclub.schedule`，不再分发两种新版本。App 顶部提供模式按钮，选择「极简模式 / 完整模式」。首次默认极简，之后保存到独立的原生 SharedPreferences；网页内切换也会通过限定来源的消息桥同步该偏好。会话过期、退出登录和清理登录缓存不重置模式。
 
-构建时使用 `-PspsSimple=true`：
+沿用原 App 的 WebView 安全边界、加密会话、可选记住密码、文件选择及下载。模式选择只允许 `simple` / `full` 两个值，不改变权限；完整页面仍由网页和后端要求登录。尚未保存的编辑在通过原生按钮切换时会提示确认。
+
+原完整版 1.0–1.2 可用相同签名覆盖安装，保留本机登录。旧独立极简版 `org.spsclub.schedule.simple` 是不同包名，需安装统一版并重新登录；服务器账号与任务不用迁移，之后只需使用统一版。
 
 ```sh
 cd android
-./gradlew -PspsSimple=true testDebugUnitTest lintRelease assembleRelease
+./gradlew testDebugUnitTest lintRelease assembleRelease
 ```
 
-发布构建仍通过仓库外的 `SPS_ANDROID_SIGNING_PROPERTIES` 指定原有签名配置。未设置时 APK 未签名，不能分发安装。此次签名成品位于 `android/releases/SPS-Simple-1.0.0.apk`，发布文件位于 `public/downloads/`。登录页提供极简 APK 和兼容 Windows 解压的微信分享 ZIP。
+签名仍由仓库外的 `SPS_ANDROID_SIGNING_PROPERTIES` 配置提供。当前成品为 `public/downloads/SPS-Schedule-1.3.0.apk` 和 Windows 兼容的同名 ZIP。网站的游客日历及登录页均有统一 App 下载入口，旧下载 URL 仍保留。
 
-App 加载正式网页，本次 Worker 和前端均已部署，安装后可用已有账号进入。不提供离线编辑或后台推送。首轮真机仍需确认长按拖拽、双指缩放和各厂商 WebView 的滚动手感。
+App 加载正式网页，日常网页更新自动生效。不提供离线编辑或后台推送。真机长按、双指缩放及模式重启恢复仍需在成员设备上验收。

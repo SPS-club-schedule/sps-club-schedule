@@ -10,6 +10,7 @@ function matchingParents(tasks,title) {
   return key?tasks.filter(t=>!t.archived&&!t.parentTaskId&&normalizeHeading(t.title)===key):[];
 }
 function simpleEntries(board,scope='mine',activities=[]) {
+  if(!board?.me)board={me:{role:'guest'},tasks:[],members:[]};
   const tasks=board?.tasks||[], members=board?.members||[];
   scope=selectedScope(board.me,scope);
   const department=scope.startsWith('department:')?scope.slice(11):board.me.department;

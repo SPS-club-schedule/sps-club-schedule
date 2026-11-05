@@ -53,7 +53,8 @@ public class MainActivity extends Activity {
     private boolean acceptNativeMessages = true;
     private ValueCallback<Uri[]> fileCallback;
     private byte[] pendingFile;
-    private Button rememberButton;
+    private Button modeButton;
+    private DisplayMode displayMode;
     private boolean loginBusy;
     private int loginGeneration;
     private final java.util.concurrent.ExecutorService loginExecutor=java.util.concurrent.Executors.newSingleThreadExecutor();
@@ -62,6 +63,7 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         vault = new SessionVault(this);
+        displayMode = new DisplayMode(this);
         buildUi();
         try {
             try (java.io.InputStream input = getAssets().open("session-bridge.js")) {
@@ -98,12 +100,12 @@ public class MainActivity extends Activity {
             return android.os.Build.VERSION.SDK_INT >= 30 ? WindowInsets.CONSUMED : insets.consumeSystemWindowInsets();
         });
         LinearLayout toolbar = new LinearLayout(this); toolbar.setGravity(Gravity.CENTER_VERTICAL); toolbar.setPadding(dp(16),0,dp(4),0);
-        TextView title = label(BuildConfig.SIMPLE_MODE ? "SPS  极简日程" : "SPS  社团日程", 16, Color.rgb(36,85,64)); title.setTypeface(null, android.graphics.Typeface.BOLD);
+        TextView title = label("SPS  社团日程", 16, Color.rgb(36,85,64)); title.setTypeface(null, android.graphics.Typeface.BOLD);
         toolbar.addView(title, new LinearLayout.LayoutParams(0, dp(48), 1)); title.setGravity(Gravity.CENTER_VERTICAL);
-        rememberButton=new Button(this);rememberButton.setTextSize(13);rememberButton.setTextColor(Color.rgb(36,85,64));
-        rememberButton.setSingleLine(true);rememberButton.setPadding(dp(4),0,dp(4),0);
-        rememberButton.setBackgroundColor(Color.TRANSPARENT);rememberButton.setOnClickListener(v->showRememberDialog());
-        toolbar.addView(rememberButton,new LinearLayout.LayoutParams(dp(100),dp(48)));updateRememberButton();
+        modeButton=new Button(this);modeButton.setTextSize(13);modeButton.setTextColor(Color.rgb(36,85,64));
+        modeButton.setSingleLine(true);modeButton.setPadding(dp(4),0,dp(4),0);
+        modeButton.setBackgroundColor(Color.TRANSPARENT);modeButton.setOnClickListener(v->showModeDialog());
+        toolbar.addView(modeButton,new LinearLayout.LayoutParams(dp(112),dp(48)));updateModeButton();
         Button menu = new Button(this); menu.setText("⋮"); menu.setTextSize(22); menu.setContentDescription("App 选项");
         menu.setBackgroundColor(Color.TRANSPARENT); menu.setOnClickListener(this::showMenu);
         toolbar.addView(menu, new LinearLayout.LayoutParams(dp(48),dp(48))); root.addView(toolbar);
@@ -115,7 +117,7 @@ public class MainActivity extends Activity {
         cover.setBackgroundColor(Color.rgb(245,247,242));
         TextView mark = label("SPS", 44, Color.rgb(36,85,64)); mark.setTypeface(null, android.graphics.Typeface.BOLD); mark.setGravity(Gravity.CENTER); cover.addView(mark);
         coverTitle = label("正在打开社团日程",22,Color.rgb(30,55,43)); coverTitle.setGravity(Gravity.CENTER); coverTitle.setPadding(0,dp(20),0,dp(12)); cover.addView(coverTitle);
-        coverText = label(BuildConfig.SIMPLE_MODE ? "按时间安排，长按拖动即可创建。" : "安排任务，约定时间，一起完成。",15,Color.rgb(90,110,99)); coverText.setGravity(Gravity.CENTER); cover.addView(coverText);
+        coverText = label("先看公开日历，登录后安排自己的任务。",15,Color.rgb(90,110,99)); coverText.setGravity(Gravity.CENTER); cover.addView(coverText);
         retry = new Button(this); retry.setText("重新连接"); retry.setVisibility(View.GONE); retry.setOnClickListener(v -> loadHome());
         LinearLayout.LayoutParams button = new LinearLayout.LayoutParams(-2,dp(52)); button.topMargin=dp(24); cover.addView(retry,button);
         content.addView(cover,new FrameLayout.LayoutParams(-1,-1)); setContentView(root);
@@ -145,6 +147,10 @@ public class MainActivity extends Activity {
                     if (data == null || data.length() > 3 * 1024 * 1024) return;
                     JSONObject input = new JSONObject(data);
                     switch (input.optString("type")) {
+                        case "displayMode":
+                            if(data.length()>128 || !DisplayMode.valid(input.optString("mode")))return;
+                            if(!displayMode.set(input.getString("mode"))){toast("显示模式未能保存，请重试");return;}
+                            updateModeButton();installSnapshot(vault.read());break;
                         case "session":
                             if (loginBusy || data.length() > 16384) return;
                             try { JSONObject snapshot=vault.write(input);syncSavedAccount(snapshot);installSnapshot(snapshot); }
@@ -155,14 +161,14 @@ public class MainActivity extends Activity {
                             break;
                         case "webLogin":
                             if(loginBusy || data.length()>16384)return;
-                            try {installSnapshot(vault.rememberWebLogin(input));updateRememberButton();}
-                            catch(Exception error){vault.clearCredentials();updateRememberButton();toast("本次登录可继续使用，但未能保存密码，请下次登录时重试");}
+                            try {installSnapshot(vault.rememberWebLogin(input));}
+                            catch(Exception error){vault.clearCredentials();toast("本次登录可继续使用，但未能保存密码，请下次登录时重试");}
                             break;
                         case "signedOut":
-                            cancelLogin();vault.clearCredentials();vault.write(new JSONObject());installSnapshot(new JSONObject());updateRememberButton();break;
+                            cancelLogin();vault.clearCredentials();vault.write(new JSONObject());installSnapshot(new JSONObject());break;
                         case "credentialsChanged":
                             cancelLogin();
-                            if(vault.credentials().has("password")){vault.clearCredentials();updateRememberButton();toast("密码已变更，下次正常登录时会自动保存新密码");}
+                            if(vault.credentials().has("password")){vault.clearCredentials();toast("密码已变更，下次正常登录时会自动保存新密码");}
                             break;
                         case "sessionExpired": if(!loginBusy && vault.mayAutoLogin())loadHome();break;
                         case "saveText": saveText(input); break;
@@ -225,6 +231,8 @@ public class MainActivity extends Activity {
     }
 
     private void installSnapshot(JSONObject value) {
+        try { value=new JSONObject(value.toString()).put("displayMode",displayMode.get()); }
+        catch(Exception ignored){return;}
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return;
         if (bridgeScript!=null && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) bridgeScript.remove();
         bridgeScript=WebViewCompat.addDocumentStartJavaScript(web,bridgeSource.replace("__SPS_SNAPSHOT__",value.toString()),Collections.singleton(TrustedSite.ORIGIN));
@@ -252,17 +260,31 @@ public class MainActivity extends Activity {
             beginLogin(credentials.optString("username"),credentials.optString("password"),true,()->{},message->{toast(message);loadHome();});
             return;
         }
-        coverTitle.setText("正在打开社团日程"); coverText.setText(BuildConfig.SIMPLE_MODE ? "按时间安排，长按拖动即可创建。" : "安排任务，约定时间，一起完成。"); retry.setVisibility(View.GONE);
-        web.loadUrl(TrustedSite.START);
+        coverTitle.setText("正在打开社团日程"); coverText.setText("先看公开日历，登录后安排自己的任务。"); retry.setVisibility(View.GONE);
+        web.loadUrl(TrustedSite.start(displayMode.get()));
     }
-    private void updateRememberButton(){rememberButton.setText(vault.credentials().has("password")?"自动登录 ✓":"登录设置");}
+    private void updateModeButton(){
+        modeButton.setText("simple".equals(displayMode.get())?"极简模式 ▾":"完整模式 ▾");
+        modeButton.setContentDescription("选择显示模式，当前"+("simple".equals(displayMode.get())?"极简模式":"完整模式"));
+    }
+    private void showModeDialog(){
+        new AlertDialog.Builder(this).setTitle("显示模式")
+            .setSingleChoiceItems(new String[]{"极简模式 · 先看日历","完整模式 · 登录后协作"},"simple".equals(displayMode.get())?0:1,(dialog,index)->{
+                dialog.dismiss();String mode=index==0?"simple":"full";
+                if(TrustedSite.isPage(web.getUrl())&&!loadFailed&&cover.getVisibility()!=View.VISIBLE){
+                    // Let the website protect any unsaved form. It acknowledges
+                    // accepted changes through the origin-restricted storage bridge.
+                    web.evaluateJavascript("window.dispatchEvent(new CustomEvent('sps:select-mode',{detail:"+JSONObject.quote(mode)+"}))",null);
+                }else if(displayMode.set(mode)){updateModeButton();installSnapshot(vault.read());loadHome();}
+            }).setNegativeButton("取消",null).show();
+    }
     private void syncSavedAccount(JSONObject snapshot) throws Exception {
         JSONObject credentials=vault.credentials(),session=snapshot.optJSONObject("session");
         if(session==null || !credentials.has("password"))return;
         JSONObject user=session.getJSONObject("user");
         if(!credentials.getString("accountId").equals(user.getString("id")))vault.clearCredentials();
         else vault.saveCredentials(credentials.put("username",user.getString("username")).put("clubId",snapshot.optString("clubId")));
-        updateRememberButton();
+
     }
     private void showRememberDialog() {
         if(loginBusy){toast("正在登录，请稍候");return;}
@@ -279,14 +301,14 @@ public class MainActivity extends Activity {
         TextView error=label("",14,Color.rgb(150,45,45));fields.addView(error);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("登录与密码设置").setView(fields)
             .setPositiveButton("保存并登录",null).setNegativeButton("取消",null)
-            .setNeutralButton("清除已存密码",(d,w)->{cancelLogin();vault.clearCredentials();updateRememberButton();toast("已清除保存的密码，当前登录仍可使用");}).create();
+            .setNeutralButton("清除已存密码",(d,w)->{cancelLogin();vault.clearCredentials();toast("已清除保存的密码，当前登录仍可使用");}).create();
         dialog.setOnDismissListener(d->{password.setText("");if(loginBusy)cancelLogin();});
         dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
             String user=name.getText().toString().trim(),pass=password.getText().toString();
             if(pass.isEmpty() && user.equalsIgnoreCase(saved.optString("username")))pass=saved.optString("password");
             if(!user.matches("[a-zA-Z0-9_]{3,30}") || pass.length()<10 || pass.length()>128){error.setText("请输入有效用户名和10—128位密码");return;}
             error.setText("正在验证并保存…");dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
-            beginLogin(user,pass,false,dialog::dismiss,message->{error.setText(message);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);updateRememberButton();});
+            beginLogin(user,pass,false,dialog::dismiss,message->{error.setText(message);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);});
         }));
         dialog.show();
     }
@@ -304,7 +326,7 @@ public class MainActivity extends Activity {
                     if(automatic && (status==400 || status==401 || status==403))vault.clearCredentials();
                     else if(status==429)vault.delayAutoLogin(15*60000);
                     else if(automatic)vault.delayAutoLogin(60000);
-                    updateRememberButton();
+
                     failure.accept(error instanceof LoginClient.Failure?error.getMessage():"连接失败，请联网后重试；已保存的信息会保留");
                 });return;
             }
@@ -321,7 +343,7 @@ public class MainActivity extends Activity {
                     vault.saveCredentials(new JSONObject().put("username",user.getString("username")).put("password",password).put("accountId",id).put("clubId",club));
                     vault.delayAutoLogin(0);loginBusy=false;success.run();recreate();
                 } catch(Exception error){
-                    acceptNativeMessages=true;loginBusy=false;vault.clearCredentials();updateRememberButton();
+                    acceptNativeMessages=true;loginBusy=false;vault.clearCredentials();
                     failure.accept("未能加密保存登录信息，请重试");
                 }
             });
@@ -331,7 +353,7 @@ public class MainActivity extends Activity {
         PopupMenu menu = new PopupMenu(this,anchor);
         menu.getMenu().add(0,1,0,"刷新页面"); menu.getMenu().add(0,2,1,"在浏览器中打开");
         menu.getMenu().add(0,3,2,"清除本机登录与缓存"); menu.getMenu().add(0,4,3,"关于 App");
-        menu.getMenu().add(0,5,4,"登录设置 / 管理自动登录");
+        menu.getMenu().add(0,5,4,vault.credentials().has("password")?"自动登录 ✓ / 管理密码":"登录设置 / 管理自动登录");
         menu.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
                 case 1:
@@ -343,7 +365,7 @@ public class MainActivity extends Activity {
                         .setPositiveButton("清除",(d,w)->clearLocalData()).setNegativeButton("取消",null).show(); break;
                 case 4:
                     new AlertDialog.Builder(this).setTitle("SPS 社团日程 "+BuildConfig.VERSION_NAME)
-                        .setMessage("登录页默认勾选“记住密码”，登录成功后在本机加密保存账号密码。可以取消勾选；会话到期时自动登录，主动退出会清除保存的密码。顶部“登录设置”可单独管理。\n\n任务、日历与经验档案从网站加载，网页更新会自动生效。使用需要联网。\n\nAndroid 8.0 及以上，并需支持现代网页功能的系统 WebView。")
+                        .setMessage("首次默认极简模式，可不登录浏览公开预约。顶部模式按钮可切换到完整模式，选择会在下次打开时保留。\n\n登录页默认勾选“记住密码”，登录成功后在本机加密保存账号密码。可以取消勾选；会话到期时自动登录，主动退出会清除保存的密码。右上角菜单中的“登录设置”可单独管理。\n\n任务、日历与经验档案从网站加载，网页更新会自动生效。使用需要联网。\n\nAndroid 8.0 及以上，并需支持现代网页功能的系统 WebView。")
                         .setPositiveButton("知道了",null).show(); break;
                 case 5: showRememberDialog();break;
                 default: break;
