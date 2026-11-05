@@ -23,6 +23,9 @@ const androidDownloads = `<div class="android-downloads">
   <div><a class="secondary compact" href="${androidPackage}.apk" download>下载安卓 App</a>
   <a class="plain small" href="${androidPackage}.zip" download>微信分享包（ZIP）</a></div>
   <p class="hint">v${androidVersion} · 适用于 Android 8.0 及以上</p>
+  <div class="space"><a class="secondary compact" href="./downloads/SPS-Simple-1.0.0.apk" download>下载极简版 App</a>
+  <a class="plain small" href="./downloads/SPS-Simple-1.0.0.zip" download>极简版微信分享包（ZIP）</a></div>
+  <p class="hint">极简版 v1.0.0 · 只看日历 · 可与原 App 同时安装</p>
 </div>`;
 const brand = `<div class="brand-mark">SPS</div><div class="eyebrow">BETTER TOGETHER</div><h1 class="h1 space">社团的每一件事，<br>一起完成。</h1><p class="muted space">安排任务，约定时间，让每一份参与都有回应。</p>`;
 const parentLink = t => t.parentTaskId && t.parentVisible!==false ? link('/task?id='+encodeURIComponent(t.parentTaskId),'↳ '+e(t.parentTitle),'parent-task-link small') : '';

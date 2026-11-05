@@ -40,6 +40,6 @@ cd android
 ./gradlew -PspsSimple=true testDebugUnitTest lintRelease assembleRelease
 ```
 
-发布构建仍通过仓库外的 `SPS_ANDROID_SIGNING_PROPERTIES` 指定原有签名配置。未设置时 APK 未签名，不能分发安装。此次签名成品位于 `android/releases/SPS-Simple-1.0.0.apk`。
+发布构建仍通过仓库外的 `SPS_ANDROID_SIGNING_PROPERTIES` 指定原有签名配置。未设置时 APK 未签名，不能分发安装。此次签名成品位于 `android/releases/SPS-Simple-1.0.0.apk`，发布文件位于 `public/downloads/`。登录页提供极简 APK 和兼容 Windows 解压的微信分享 ZIP。
 
 App 加载正式网页，必须先部署本次 Worker 和前端，极简入口才可在 App 中使用。不提供离线编辑或后台推送。首轮真机仍需确认长按拖拽、双指缩放和各厂商 WebView 的滚动手感。
