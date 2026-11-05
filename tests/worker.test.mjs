@@ -430,7 +430,7 @@ test('optional duration, automatic deadlines and later manual overrides survive 
   assert.equal(shifted.task.dueAt,startsAt-86400000);
   const delta=await api('sync',{clubId,since:board.version});
   assert.equal(delta.tasks[0].startsAt,startsAt+3600000); assert.equal(delta.tasks[0].deadlineFollowsStart,false);
-  assert.equal((await post('/api',{action:'createTask',input:{...t,requestId:'duration-child-worker',parentTaskId:t._id}},owner.token)).status,400);
+  assert.equal((await post('/api',{action:'createTask',input:{...t,requestId:'duration-child-worker',parentTaskId:t._id}},owner.token)).status,200);
   const removed=await api('editTask',{...shifted.task,taskId:t._id,startsAt:null,endsAt:null});
   assert.equal(removed.task.startsAt,null); assert.equal(removed.task.dueAt,startsAt-86400000);
 });

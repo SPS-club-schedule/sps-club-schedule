@@ -12,6 +12,12 @@ export function createAccountService({ store, sql, password, passwordHash, verif
       const row = sql.exec('SELECT * FROM accounts WHERE id=?', actor.id).toArray()[0];
       if (!row) fail('UNAUTHENTICATED', '账号已失效，请重新登录');
       if (action === 'accountSettings') return { account:info(row) };
+      if (action === 'accountSetNotifications') {
+        if(input.revision!==accountRevision(sql,row.id))fail('CONFLICT','账号资料已更新，请重新加载后再修改');
+        mail.setNotifications(row.id,input.enabled);
+        bumpAccountRevision(sql,row.id);
+        return {account:info(row)};
+      }
       if (['accountRequestEmail','accountResendEmail','accountVerifyEmail'].includes(action)) {
         if (input.revision !== accountRevision(sql,row.id)) fail('CONFLICT','账号资料已更新，请重新加载后再修改');
         if(action==='accountRequestEmail') {

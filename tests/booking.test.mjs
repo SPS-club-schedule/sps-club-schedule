@@ -29,6 +29,13 @@ test('durable task sync retries failures, isolates clubs, preserves private data
     const fields={clubId:owner.clubId,title:'Activity',description:'PRIVATE DESCRIPTION',mode:'individual',priority:'normal',participantIds:[b.me.id],startsAt:Date.now()+86400000,endsAt:Date.now()+90000000,deadlineFollowsStart:true};
     const created=await api('createTask',{...fields,requestId:'booking-integration'},owner.token);
     await wait(()=>sent.length===1);assert.equal(sent[0].sourceId,owner.clubId);assert.equal(sent[0].events[0].location,'未定');assert.doesNotMatch(JSON.stringify(sent[0]),/PRIVATE|participant|completions|member/);
+    const simple=await api('createSimpleTask',{clubId:owner.clubId,major:'Activity',minor:'Only in calendar',startsAt:fields.startsAt,endsAt:fields.endsAt,participantIds:[b.me.id],requestId:'simple-booking-child'},owner.token);
+    assert.equal(simple.task.parentTaskId,created.taskId);
+    await wait(()=>sent.at(-1).version>=simple.version);
+    assert.deepEqual(sent.at(-1).events.map(e=>e.id),[created.taskId]);
+    const ddl=await api('createSimpleTask',{clubId:owner.clubId,major:'Deadline only',minor:'',startsAt:fields.startsAt,endsAt:fields.startsAt,participantIds:[b.me.id],requestId:'simple-booking-ddl'},owner.token);
+    await wait(()=>sent.at(-1).version>=ddl.version);
+    assert.deepEqual(sent.at(-1).events.map(e=>e.id),[created.taskId]);
     let task=created.task;
     task=(await api('editTask',{...fields,taskId:task._id,revision:task.revision,location:'物理楼 301',endsAt:fields.endsAt+3600000},owner.token)).task;
     await wait(()=>sent.at(-1).events[0]?.location==='物理楼 301');

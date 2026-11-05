@@ -34,6 +34,12 @@ test('Worker enforces email onboarding, privately verifies email, persists outbo
     assert.equal(verified.currentUser.emailVerified,true);assert.equal(verified.account.revision,info.revision+1);assert.equal((await api('accountSettings',{},member.token)).account.emailVerified,false);
     assert.equal((await attempt('accountRequestEmail',{revision:verified.account.revision,email:'bad@example.test',currentPassword:'Wrong-password!'},owner.token)).status,403);
     assert.equal((await attempt('accountVerifyEmail',{revision:info.revision,code:code(owner.user.email)},owner.token)).status,409);
+    const preference=await api('accountSetNotifications',{revision:verified.account.revision,enabled:false,accountId:member.user.id},owner.token);
+    assert.equal(preference.account.emailNotificationsEnabled,false);assert.equal(preference.currentUser.emailNotificationsEnabled,false);
+    assert.equal((await api('accountSettings',{},member.token)).account.emailNotificationsEnabled,true);
+    assert.equal((await attempt('accountSetNotifications',{revision:verified.account.revision,enabled:true},owner.token)).status,409);
+    assert.equal((await attempt('accountSetNotifications',{revision:preference.account.revision,enabled:'false'},owner.token)).status,400);
+    await api('accountSetNotifications',{revision:preference.account.revision,enabled:true},owner.token);
     const board=await api('bootstrap',{clubId},member.token);assert.ok(!JSON.stringify(board).includes(owner.user.email));
     const admin=await api('adminMembers',{clubId},owner.token);assert.ok(!JSON.stringify(admin.members).includes(member.user.email));
     assert.equal((await post('/internal/mail-tick',{},owner.token)).status,404);assert.equal((await attempt('accountVerifyEmail',{})).status,401);

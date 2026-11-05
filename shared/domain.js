@@ -1,4 +1,5 @@
 'use strict';
+const { normalizeHeading } = require('./simple-calendar');
 const { seminarTemplate, MAX_STEPS, MAX_ROLES } = require('./templates');
 const { DEPARTMENTS, validDepartment, departmentLabel } = require('./departments');
 const { isAdmin, isSpeaker, isCoreMember } = require('./permissions');
@@ -67,7 +68,6 @@ function createService({ store, now, randomId, hash }) {
     const endsAt=input.endsAt===undefined?previous?.endsAt ?? null:input.endsAt;
     const range=startsAt!==null || endsAt!==null;
     if (input.deadlineFollowsStart!==undefined && typeof input.deadlineFollowsStart!=='boolean') fail('VALIDATION','截止时间跟随设置无效');
-    if (child && (range || input.deadlineFollowsStart)) fail('VALIDATION','子任务只设置截止时间，不设置持续时段');
     if (range && (!Number.isSafeInteger(startsAt) || !Number.isSafeInteger(endsAt) || startsAt<0 || endsAt<=startsAt || endsAt>now()+5*366*86400000)) fail('VALIDATION','请设置有效的持续时段：结束时间须晚于开始时间，且不能超过五年');
     if (!range && input.deadlineFollowsStart) fail('VALIDATION','请先启用持续时段');
     const wasFollowing=previous && (previous.deadlineFollowsStart ?? previous.dueAt===previous.startsAt);
@@ -426,6 +426,7 @@ function createService({ store, now, randomId, hash }) {
         const taskIds=new Map(steps.map((step,index)=>[step.id,taskId+'_'+index]));
         const children = steps.map((step, index) => {
           if (!step || typeof step !== 'object') fail('VALIDATION', '子任务格式无效');
+          if (step.startsAt != null || step.endsAt != null) fail('VALIDATION','模板子任务仅设置截止时间');
           const daysBefore = offset(step.daysBefore);
           const childDue = plan[index].dueAt;
           if (!Number.isSafeInteger(childDue) || childDue <= now()) fail('VALIDATION', `子任务${index + 1}的截止时间已过，请调整日期或提前天数`);
@@ -439,6 +440,75 @@ function createService({ store, now, randomId, hash }) {
         const tasks = [task, ...children.map((child, index) => ({ ...child, ...common, _id: taskId + '_' + index, parentTaskId: taskId, parentCreatorId: me._id }))];
         for (const item of tasks) await tx.put('tasks', item._id, item);
         return { ...change, taskId, task, tasks };
+      });
+    },
+    async createSimpleTask(input, identity) {
+      const taskId=docKey('simple_',input.clubId+':'+identity,input.requestId);
+      return store.transaction(async tx=>{
+        const me=await member(tx,input.clubId,identity);requireCore(me);
+        const receipt=await tx.get('simpleRequests',taskId);
+        if(receipt){const task=await tx.get('tasks',receipt.taskId);return unchanged(tx,input.clubId,{taskId:task._id,task});}
+        const previous=await tx.get('tasks',taskId);
+        if(previous)return unchanged(tx,input.clubId,{taskId,task:previous,tasks:[previous,...(previous.parentTaskId?[await tx.get('tasks',previous.parentTaskId)]:[])].filter(Boolean)});
+        const major=text(input.major,'大标题',80),minor=text(input.minor||'','小标题',80,true);
+        if(!Number.isSafeInteger(input.startsAt)||!Number.isSafeInteger(input.endsAt)||input.endsAt<input.startsAt)fail('VALIDATION','请填写有效的起止时间，结束不能早于开始');
+        const timing=schedule({dueAt:input.endsAt,startsAt:input.endsAt===input.startsAt?null:input.startsAt,endsAt:input.endsAt===input.startsAt?null:input.endsAt,deadlineFollowsStart:false});
+        const roster=await activeMembers(tx,{clubId:input.clubId});
+        const assigned=assignment({mode:'individual',participantIds:input.participantIds},roster);
+        const roots=(await tx.find('tasks',{clubId:input.clubId})).filter(t=>!t.archived&&!t.parentTaskId&&normalizeHeading(t.title)===normalizeHeading(major));
+        if(input.parentTaskId&&!roots.some(t=>t._id===input.parentTaskId))fail('CONFLICT','选中的大标题已变更，请重新选择');
+        if(roots.length>1&&!input.parentTaskId)fail('CONFLICT','存在多个同名大标题，请选择对应的日程');
+        let parent=roots.find(t=>t._id===input.parentTaskId)||roots[0];
+        if(!minor&&parent) {
+          if(!parent.simpleContainer)fail('CONFLICT','已有这个大标题。请填写小标题，或打开原日程编辑时间');
+          if(!canManage(parent,me))fail('FORBIDDEN','仅大标题创建者或社团创建者可以设置它的独立日程');
+          // Keep this request's ID as an idempotency receipt when promoting a container.
+          const change=await stamp(tx,input.clubId,'tasks');
+          const updated={...parent,...timing,...assigned,simpleContainer:false,updatedAt:now(),revision:parent.revision+1,syncVersion:change.version};
+          await tx.put('tasks',parent._id,updated);
+          await tx.put('simpleRequests',taskId,{taskId:parent._id});
+          return {...change,taskId:parent._id,task:updated};
+        }
+        const change=await stamp(tx,input.clubId,'tasks');
+        const common={clubId:input.clubId,creatorId:me._id,createdAt:now(),updatedAt:now(),revision:1,syncVersion:change.version,archived:false,completions:{},sharedCompletion:null,priority:'normal',description:''};
+        const tasks=[];
+        if(minor&&!parent) {
+          parent={...common,...assigned,_id:taskId+'_heading',title:major,dueAt:timing.dueAt,startsAt:null,endsAt:null,deadlineFollowsStart:false,location:'',simpleContainer:true};
+          tasks.push(parent);
+        }
+        // Every core member may append their own item to a shared heading. This
+        // grants no permission to edit that heading or other members' items.
+        const task={...common,...assigned,...timing,_id:taskId,title:minor||major,...(minor?{parentTaskId:parent._id,parentCreatorId:parent.creatorId}:{})};
+        tasks.push(task);
+        for(const item of tasks)await tx.put('tasks',item._id,item);
+        return {...change,taskId,task,tasks};
+      });
+    },
+    async editSimpleTask(input,identity) {
+      return store.transaction(async tx=>{
+        const {task,me}=await taskAccess(tx,input.taskId,identity);
+        if(!canManage(task,me))fail('FORBIDDEN','仅发布者或社团创建者可以修改日程');
+        if(task.archived)fail('ARCHIVED','日程已归档');
+        if(task.revision!==input.revision)fail('CONFLICT','日程已更新，请关闭后重新打开');
+        const title=text(task.parentTaskId?input.minor:input.major,task.parentTaskId?'小标题':'大标题',80);
+        if(task.parentTaskId){
+          const parent=await tx.get('tasks',task.parentTaskId);
+          if(!parent||parent.archived)fail('ARCHIVED','大标题已归档');
+          if(input.major!==parent.title)fail('CONFLICT','所属大标题已更新，请关闭后重新打开');
+        }else if(normalizeHeading(title)!==normalizeHeading(task.title)){
+          const duplicate=(await tx.find('tasks',{clubId:task.clubId})).some(t=>t._id!==task._id&&!t.archived&&!t.parentTaskId&&normalizeHeading(t.title)===normalizeHeading(title));
+          if(duplicate)fail('CONFLICT','已有这个大标题，请使用不同名称');
+        }
+        if(!Number.isSafeInteger(input.startsAt)||!Number.isSafeInteger(input.endsAt)||input.endsAt<input.startsAt)fail('VALIDATION','结束时间不能早于开始时间');
+        const timing=schedule({dueAt:input.endsAt,startsAt:input.endsAt===input.startsAt?null:input.startsAt,endsAt:input.endsAt===input.startsAt?null:input.endsAt,deadlineFollowsStart:false},task,!!task.parentTaskId);
+        const roster=await activeMembers(tx,{clubId:task.clubId});
+        const assigned=assignment({mode:task.mode,participantIds:input.participantIds,guestNames:(task.guestParticipants||[]).map(p=>p.name).join('\n')},roster);
+        const changed=assigned.participantIds.length!==task.participantIds.length||assigned.participantIds.some(id=>!task.participantIds.includes(id));
+        if(changed&&(Object.keys(task.completions||{}).length||task.sharedCompletion))fail('CONFLICT','该任务已有协作记录，请到完整模式调整负责人');
+        const change=await stamp(tx,task.clubId,'tasks');
+        const updated={...task,...assigned,...timing,title,updatedAt:now(),revision:task.revision+1,syncVersion:change.version};
+        await tx.put('tasks',task._id,updated);
+        return {...change,taskId:task._id,task:updated};
       });
     },
     async createTask(input, identity) {

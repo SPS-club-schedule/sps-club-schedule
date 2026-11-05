@@ -16,7 +16,7 @@ await fs.rm(path.join(root,'dist/assets'), {recursive:true,force:true});
 await fs.mkdir(path.join(root,'dist/assets'), { recursive:true });
 const bundle=await build({ entryPoints:[path.join(root,'client/app.js')], outdir:path.join(root,'dist/assets'), entryNames:'app-[hash]', chunkNames:'[name]-[hash]', splitting:true, format:'esm', bundle:true, minify:true, platform:'browser', target:'es2020',metafile:true,define:{__RELEASE_ID__:JSON.stringify(releaseId)} });
 const script='./assets/'+path.basename(Object.entries(bundle.metafile.outputs).find(([,value])=>value.entryPoint==='client/app.js'||value.entryPoint===path.join(root,'client/app.js'))[0]);
-const css = await Promise.all(['style.css','web.css','workspace.css','experience.css'].map(name=>fs.readFile(path.join(root,'client',name),'utf8')));
+const css = await Promise.all(['style.css','web.css','workspace.css','experience.css','simple.css'].map(name=>fs.readFile(path.join(root,'client',name),'utf8')));
 const mathCss=await fs.readFile(path.join(root,'node_modules/katex/dist/katex.min.css'),'utf8');
 await fs.cp(path.join(root,'node_modules/katex/dist/fonts'),path.join(root,'dist/assets/fonts'),{recursive:true});
 const styles=css.join('\n')+'\n'+mathCss;

@@ -27,7 +27,7 @@ export function createBookingSync(ctx,env,store) {
     const row=status();
     if (!configured() || !row || row.delivered>=row.desired) return;
     const tasks=await store.find('tasks',{clubId:env.BOOKING_CLUB_ID});
-    const events=tasks.filter(t=>!t.archived&&hasDuration(t)).map(t=>({id:t._id,title:t.title,location:t.location || '未定',startsAt:t.startsAt,endsAt:t.endsAt}));
+    const events=tasks.filter(t=>!t.archived&&!t.parentTaskId&&!t.simpleContainer&&hasDuration(t)).map(t=>({id:t._id,title:t.title,location:t.location || '未定',startsAt:t.startsAt,endsAt:t.endsAt}));
     try {
       const response=await fetch(env.BOOKING_SYNC_URL,{method:'PUT',headers:{Authorization:'Bearer '+env.BOOKING_SYNC_KEY,'Content-Type':'application/json'},
         body:JSON.stringify({sourceId:env.BOOKING_CLUB_ID,version:row.desired,events}),signal:AbortSignal.timeout(15000)});

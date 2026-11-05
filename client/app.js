@@ -1,4 +1,5 @@
 import * as api from './api';
+import {createSimple,simplePreferred} from './simple';
 import * as views from './views';
 import {emailReminder} from './account-views';
 import { parts, taskView, parseDeadline } from '../shared/view';
@@ -51,6 +52,7 @@ const workspaceUi={calendarOpen:false,context:'mine',clubId:'',planner:{date:par
 let stop = null, generation = 0, inviteKey = '', adminLoad = 0;
 let activeRouteHash=location.hash,documentPreviewTimer;
 let s = { page: 'auth', authMode: 'login', joinMode: 'join', form: {}, sync: api.sync.getState(), filter: 'all', search: '', busy: false, error: '' };
+const simple=createSimple({root,getState:()=>s,render,go,perform,toast,confirmAction});
 function authDestination(value) {
   if(value==='experience'||value==='/experience')return '/experience';
   try {
@@ -61,6 +63,8 @@ function authDestination(value) {
 }
 function go(path) { if (location.hash === '#' + path) route(); else location.hash = path; }
 function render() {
+  if(s.page==='simple'&&simple.interacting())return;
+  simple.beforeRender();
   const active = document.activeElement, name = active?.getAttribute('name');
   const start = active?.selectionStart, end = active?.selectionEnd;
   const calendarFocus = active?.matches('.deadline-calendar button') ? { action: active.dataset.action, value: active.dataset.value } : null;
@@ -72,8 +76,10 @@ function render() {
   const agendaScroll = root.querySelector('.calendar-agenda-list')?.scrollTop;
   const agendaFocus = active?.matches('.calendar-agenda-list');
   const scroll = window.scrollY;
-  const html = ['board','mine','calendar'].includes(s.page) ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, experience:views.experience, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, 'admin-archives':views.archives, reset:views.resetPassword, account:views.accountSettings }[s.page] || views.auth)(s);
-  root.innerHTML = workspace(s,(!['auth','reset','account'].includes(s.page)?emailReminder(api.user()):'')+html,workspaceUi);
+  const html = s.page==='simple'?simple.view(s):['board','mine','calendar'].includes(s.page) ? views.board(s, s.page === 'mine') : ({ auth: views.auth, entry: views.entry, experience:views.experience, task: views.detail, edit: views.editor, members: views.members, templates: views.templates, 'template-edit': views.templateEditor, admin:views.admin, 'admin-edit':views.adminEditor, 'admin-archives':views.archives, reset:views.resetPassword, account:views.accountSettings }[s.page] || views.auth)(s);
+  s.simpleMode=simplePreferred();
+  root.innerHTML = s.page==='simple'?html:s.page==='account'&&simplePreferred()?`<main class="simple-account">${views.accountSettings(s)}</main>`:workspace(s,(!['auth','reset','account'].includes(s.page)?emailReminder(api.user()):'')+html,workspaceUi);
+  simple.afterRender();
   const editorPage=root.querySelector('.editor-pane .page');if(editorPage)editorPage.dataset.scrollKey=s.page+'-'+(s.id||'new');
   for(const el of root.querySelectorAll('[data-scroll-key]')){const pos=regionScroll.get(el.dataset.scrollKey);if(pos){el.scrollTop=pos[0];el.scrollLeft=pos[1];}}
   const grid=root.querySelector('.planner-scroll');if(grid){grid.scrollTop=plannerPosition?.[0]??480;grid.scrollLeft=plannerPosition?.[1]||0;}
@@ -93,7 +99,7 @@ function render() {
   const agenda = root.querySelector('.calendar-agenda-list');
   if (agenda) { agenda.scrollTop = agendaScroll || 0; if (agendaFocus) agenda.focus({ preventScroll: true }); }
   window.scrollTo(0, scroll);
-  tutorial.update(s,api.user()?.id);
+  if(s.page!=='simple'&&!simplePreferred())tutorial.update(s,api.user()?.id);
 }
 function toast(message) {
   const el = document.getElementById('toast'); el.textContent = message; el.hidden = false;
@@ -158,7 +164,7 @@ function receive(state) {
   if(state.board?.me)workspaceUi.planner.scope=selectedScope(state.board.me,workspaceUi.planner.scope);
   if ((['board','mine','calendar'].includes(s.page)||workspaceUi.calendarOpen) && state.phase==='ready' && state.board?.club && !s.bookingLoading && Date.now()-(s.bookingCheckedAt || 0)>30000) loadBooking();
   if (s.page==='templates' && s.category && state.board && !(state.board.templates || []).some(t=>t.category===s.category)) s.category='';
-  if (state.board && !state.board.club && ['board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(s.page)) { go('/entry'); return; }
+  if (state.board && !state.board.club && ['simple','board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(s.page)) { go('/entry'); return; }
   if (state.board?.club && !api.clubId()) api.setClub(state.board.club.id);
   if (adminPage()) {
     if (!isAdmin(state.board?.me?.role)) clearAdmin();
@@ -202,6 +208,7 @@ async function route() {
   const page = url.pathname.slice(1), invitation = url.searchParams.get('invite');
   if (!api.user() && !['auth','reset','experience'].includes(page)) { const next=authDestination(url.pathname+url.search);go('/auth'+(next?'?next='+encodeURIComponent(next):'')); return; }
   if (api.user() && page === 'auth') { go(invitation ? '/entry?invite=' + encodeURIComponent(invitation) : authDestination(url.searchParams.get('next'))||'/mine'); return; }
+  if(api.user()&&['board','mine','calendar'].includes(page)&&simplePreferred()){go('/simple');return;}
   if(api.user()&&page==='task'&&authDestination(url.pathname+url.search)&&url.searchParams.get('club')!==api.clubId())api.setClub(url.searchParams.get('club'));
   if(['board','mine','templates'].includes(page))workspaceUi.context=page;
   if(page==='calendar')workspaceUi.calendarOpen=true;
@@ -217,8 +224,9 @@ async function route() {
     // Keep the bearer secret out of the URL after reading the reset link.
     history.replaceState(null,'','#/reset');
   }
+  if(page==='simple')simple.enter();
   inviteKey = ''; window.scrollTo(0,0); render();
-  if (['board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(page)) { stop = api.sync.watch(receive); return; }
+  if (['simple','board','mine','calendar','task','members','templates','admin','admin-edit','admin-archives'].includes(page)) { stop = api.sync.watch(receive); return; }
   if (page === 'auth' || page==='reset') return;
   if(page==='experience') {
     if(api.user()){try{await api.bootstrap();if(ticket!==generation)return;s.sync=api.sync.getState();}catch(error){if(ticket!==generation)return;s.error=error.message;}}
@@ -402,6 +410,7 @@ async function experienceAction(action,id) {
 }
 function inputChanged(event) {
   if (s.busy) return;
+  if(simple.input(event))return;
   const { name, value } = event.target;
   if (!name) return;
   if(name.startsWith('experience')) {
@@ -450,7 +459,7 @@ function inputChanged(event) {
 root.addEventListener('input', inputChanged);
 root.addEventListener('change', inputChanged);
 root.addEventListener('submit', event => {
-  event.preventDefault(); const kind = event.target.dataset.form;
+  event.preventDefault(); if(simple.submit(event))return; const kind = event.target.dataset.form;
   if(isSpeaker(s.sync.board?.me?.role)&&['task','template'].includes(kind)){toast('主讲人只能查看并完成分配给自己的任务');return;}
   if(s.guidePractice&&['task','template'].includes(kind)){toast('这是本地练习，请返回模板库后正式创建');return;}
   if(kind?.startsWith('experience')){submitExperience(kind,event);return;}
@@ -473,7 +482,7 @@ root.addEventListener('submit', event => {
       const result=kind==='accountEmail'?await api.requestEmail({revision:s.account.revision,email:data.accountEmail,currentPassword:data.emailPassword}):await api.verifyEmail({revision:s.account.revision,code:data.emailCode});
       if(ticket!==generation)return;
       s.account=result.account;s.form={accountUsername:result.account.username,accountEmail:result.account.email};
-      toast(result.account.emailVerified?'邮箱已验证，任务邮件提醒已启用':'验证码已加入发送队列，请稍候查看邮箱');
+      toast(result.account.emailVerified?'邮箱已验证':'验证码已加入发送队列，请稍候查看邮箱');
     }
     if (kind==='accountUsername' || kind==='accountPassword') {
       if (!s.account) throw new Error('请先重新加载账号资料');
@@ -532,6 +541,8 @@ root.addEventListener('click', event => {
     return;
   }
   if (s.busy) return;
+  if(simple.action(action,value,id))return;
+  if(action==='accountNotifications'){perform(async()=>{if(!s.account)throw new Error('请重新加载账号资料');const ticket=generation;const result=await api.setNotifications({revision:s.account.revision,enabled:s.account.emailNotificationsEnabled===false});if(ticket===generation){s.account=result.account;toast(result.account.emailNotificationsEnabled?'邮件提醒已开启':'邮件提醒已关闭');}});return;}
   if(action==='tutorial'){tutorial.open(s,api.user()?.id);return;}
   if(action==='departmentTutorial'){practiceDrafts.clear(practiceKey());tutorial.open(s,api.user()?.id,'department');return;}
   if(action.startsWith('experience')){experienceAction(action,id);return;}

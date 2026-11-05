@@ -45,7 +45,7 @@ test('manual deadline overrides persist when the interval changes and can explic
   assert.equal(hasDuration(t),false); assert.equal(t.dueAt,f.start+hour);
 });
 
-test('invalid and partial intervals reject atomically, and subtasks cannot acquire duration',async()=>{
+test('invalid and partial intervals reject atomically; subtasks support duration and templates remain deadline-only',async()=>{
   const f=await fixture(), original=f.store.snapshot();
   for(const patch of [
     {startsAt:f.start},{endsAt:f.end},{startsAt:f.start,endsAt:f.start},
@@ -56,9 +56,10 @@ test('invalid and partial intervals reject atomically, and subtasks cannot acqui
   assert.deepEqual(f.store.snapshot(),original);
   const parent=await f.run('createTask',f.input,'owner');
   const childInput={...f.input,requestId:'duration-child',parentTaskId:parent.taskId};
-  await assert.rejects(f.run('createTask',{...childInput,startsAt:f.start,endsAt:f.end},'owner'),{code:'VALIDATION'});
-  const child=await f.run('createTask',childInput,'owner');
-  await assert.rejects(f.run('editTask',{...child.task,taskId:child.taskId,startsAt:f.start,endsAt:f.end},'owner'),{code:'VALIDATION'});
+  const child=await f.run('createTask',{...childInput,startsAt:f.start,endsAt:f.end},'owner');
+  assert.equal(hasDuration(child.task),true);
+  const updated=await f.run('editTask',{...child.task,taskId:child.taskId,endsAt:f.end+hour},'owner');
+  assert.equal(updated.task.endsAt,f.end+hour);
   const snapshot=f.store.snapshot();
   await assert.rejects(f.run('createTaskGroup',{...f.input,requestId:'invalid-duration-group',subtasks:[{...f.input,daysBefore:0,startsAt:f.start,endsAt:f.end}]},'owner'),{code:'VALIDATION'});
   assert.deepEqual(f.store.snapshot(),snapshot);
@@ -98,7 +99,7 @@ test('drafts default to deadline only, follow starts until manually changed, and
   enableDuration(f,false); assert.equal(scheduleFields(f).startsAt,null); assert.equal(f.time,'22:00');
 });
 
-test('duration editor and detail render only on main tasks; older and child records stay deadline-only',async()=>{
+test('duration editor and detail support child time blocks while older records stay deadline-only',async()=>{
   const {buildSync}=require('esbuild');
   const bundle=buildSync({entryPoints:['client/views.js'],bundle:true,format:'esm',write:false});
   const views=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
@@ -106,10 +107,11 @@ test('duration editor and detail render only on main tasks; older and child reco
   const form={...created.task,...scheduleDraft(created.task),date:'2026-10-31',time:'12:00'};
   assert.match(views.editor({form,editBoard:b,steps:[]}),/开始日期/);
   const child=views.editor({form,editBoard:b,steps:[],parent:{_id:'parent',title:'Parent'}});
-  assert.ok(!child.includes('开始日期')); assert.ok(!child.includes('data-action="duration"'));
+  assert.ok(child.includes('开始日期')); assert.ok(child.includes('data-action="duration"'));
+  assert.ok(child.includes('不同步到预约页'));
   const detail=views.detail({id:created.taskId,sync:{board:b,phase:'ready'}});
   assert.ok(detail.includes('持续时段')); assert.ok(detail.includes('2026-11-01 12:00 — 14:00'));
-  assert.equal(taskView({...created.task,parentTaskId:'parent'},b).durationLabel,'');
+  assert.equal(taskView({...created.task,parentTaskId:'parent'},b).durationLabel,taskView(created.task,b).durationLabel);
 });
 
 test('template duration computes end across year/leap boundaries, keeps a manual deadline and supports manual end overrides',()=>{

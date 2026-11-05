@@ -29,15 +29,23 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     payload TEXT, provider_id TEXT, error_code TEXT, sent_at INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS email_due ON email_outbox(state,next_attempt,priority,created_at);
     CREATE INDEX IF NOT EXISTS email_account ON email_outbox(account_id);
+    CREATE TABLE IF NOT EXISTS account_preferences (account_id TEXT PRIMARY KEY, email_notifications INTEGER NOT NULL DEFAULT 1);
     CREATE TABLE IF NOT EXISTS email_meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS email_usage (day INTEGER PRIMARY KEY, used INTEGER NOT NULL DEFAULT 0);`);
   sql.exec('INSERT OR IGNORE INTO email_meta VALUES(?,?)','started_at',now());
   const startedAt=sql.exec('SELECT value FROM email_meta WHERE key=?','started_at').toArray()[0].value;
   const configured=()=>!!env.RESEND_API_KEY && env.EMAIL_NOTIFICATIONS_ENABLED==='true';
   const emailRow=id=>sql.exec('SELECT * FROM account_emails WHERE account_id=?',id).toArray()[0];
-  const info=id=>{const r=emailRow(id);return {email:r?.email||'',emailVerified:!!r?.verified_at,emailVerificationExpiresAt:r?.code_expires_at||0};};
+  const notificationsEnabled=id=>sql.exec('SELECT email_notifications FROM account_preferences WHERE account_id=?',id).toArray()[0]?.email_notifications!==0;
+  function setNotifications(id,enabled) {
+    if(typeof enabled!=='boolean')fail('VALIDATION','邮件提醒开关无效');
+    sql.exec('INSERT INTO account_preferences(account_id,email_notifications) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET email_notifications=excluded.email_notifications',id,enabled?1:0);
+    if(!enabled)sql.exec("UPDATE email_outbox SET state='cancelled',payload=NULL,context='{}' WHERE account_id=? AND kind<>'verify' AND state='queued'",id);
+  }
+  const info=id=>{const r=emailRow(id);return {emailNotificationsEnabled:notificationsEnabled(id),email:r?.email||'',emailVerified:!!r?.verified_at,emailVerificationExpiresAt:r?.code_expires_at||0};};
   const publicUser=row=>({id:row.id,username:row.username,...info(row.id)});
   function enqueue(key,kind,accountId,taskId,context,expires,priority,readyAt=0) {
+    if(kind!=='verify'&&!notificationsEnabled(accountId))return;
     sql.exec('INSERT OR IGNORE INTO email_outbox(id,kind,account_id,task_id,context,created_at,expires_at,priority,next_attempt) VALUES(?,?,?,?,?,?,?,?,?)',
       hash(key),kind,accountId,taskId||null,JSON.stringify(context),now(),expires,priority,readyAt);
   }
@@ -62,6 +70,7 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
   }
   // Only unsent mail can absorb more items. A provider retry must keep its original payload and key.
   function queueAssignmentList(rootId, member, taskIds, version) {
+    if(!notificationsEnabled(member.identity))return;
     const time = now();
     const pending = sql.exec(
       `SELECT id, context FROM email_outbox WHERE kind='assignment_list' AND account_id=?
@@ -108,6 +117,7 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     const members = new Map(roster.filter(active).map(member => [member._id, member]));
     const byRecipient = new Map();
     for (const task of tasks) {
+      if(task.simpleContainer)continue;
       const previousIds = before?._id === task._id ? before.participantIds : [];
       const currentIds = new Set(task.participantIds);
       for (const id of previousIds) {
@@ -126,7 +136,7 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
   async function changed(before, result, action, actorId) {
     if(result.baseVersion===undefined||result.baseVersion===result.version)return;
     const tasks = (result.tasks || (result.task ? [result.task] : [])).filter(active);
-    if (tasks.length && ['createTask', 'createTaskGroup', 'editTask'].includes(action)) {
+    if (tasks.length && ['createTask', 'createTaskGroup', 'editTask', 'createSimpleTask', 'editSimpleTask'].includes(action)) {
       await recordAssignments(tasks, before, actorId, result.version);
       return;
     }
@@ -160,13 +170,13 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     for (const task of tasks) {
       const {dueAt, clubId} = task;
       const rootId = task.parentTaskId || task._id;
-      if (!active(task) || taskDone(task) || roots.get(rootId)?.clubId !== clubId) continue;
+      if (!active(task) || task.simpleContainer || taskDone(task) || roots.get(rootId)?.clubId !== clubId) continue;
       if (!Number.isSafeInteger(dueAt) || dueAt < startedAt || time >= dueAt + 7 * DAY) continue;
       const overdue = time >= dueAt;
       if (!overdue && (time < dueAt - DAY || dueAt - DAY < startedAt)) continue;
 
       const roster = members.filter(m => active(m) && m.clubId === clubId);
-      const pending = roster.filter(m => memberPending(task, m._id));
+      const pending = roster.filter(m => notificationsEnabled(m.identity) && memberPending(task, m._id));
       const recipients = new Set(pending);
       if (overdue) {
         const departments = new Set(pending.map(m => m.department).filter(Boolean));
@@ -176,6 +186,7 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
       }
       const kind = overdue ? 'deadline_list' : 'day_list';
       for (const member of recipients) {
+        if(!notificationsEnabled(member.identity))continue;
         if (oldAttempts.size) {
           const oldKey = overdue ? `deadline:${task._id}:${dueAt}:${member.identity}` : `day:${task._id}:${dueAt}:${member._id}`;
           if (oldAttempts.has(hash(oldKey))) continue;
@@ -211,7 +222,7 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     const links = [];
     for (const id of context.taskIds) {
       const item = id === root._id ? root : await store.get('tasks', id);
-      if (!memberPending(item, member._id) || item.clubId !== root.clubId) continue;
+      if (item?.simpleContainer || !memberPending(item, member._id) || item.clubId !== root.clubId) continue;
       if (item._id !== root._id && item.parentTaskId !== root._id) continue;
       const kind = item._id === root._id ? '主任务' : '子任务';
       links.push({
@@ -231,11 +242,11 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     const overdue = kind === 'deadline_list';
     if (overdue !== (now() >= context.dueAt)) return null;
     const departmentMembers = overdue && me.role === 'department_admin' && me.department
-      ? roster.filter(member => member.department === me.department) : [];
+      ? roster.filter(member => notificationsEnabled(member.identity) && member.department === me.department) : [];
     const links = [];
     for (const id of context.taskIds) {
       const task = id === root._id ? root : await store.get('tasks', id);
-      if (!active(task) || task.clubId !== root.clubId || task.dueAt !== context.dueAt) continue;
+      if (!active(task) || task.simpleContainer || task.clubId !== root.clubId || task.dueAt !== context.dueAt) continue;
       if (task._id !== root._id && task.parentTaskId !== root._id) continue;
       const own = memberPending(task, me._id);
       const managed = departmentMembers.filter(member => memberPending(task, member._id));
@@ -267,15 +278,17 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
       if(!email||email.nonce!==c.nonce||email.email!==c.email||email.verified_at||email.code_expires_at<=now())return null;
       return message(email.email,'[SPS] 邮箱验证码：'+c.code,['你的邮箱验证码是：'+c.code,'验证码15分钟内有效。若并非你本人操作，请忽略本邮件。'],site()+'#/account');
     }
+    if(!notificationsEnabled(job.account_id))return null;
     const task=await store.get('tasks',job.task_id);
     if(!active(task))return null;
+    if(task.simpleContainer&&!['assignment_list','day_list','deadline_list'].includes(job.kind))return null;
     const parent=task.parentTaskId?await store.get('tasks',task.parentTaskId):null;
     if(task.parentTaskId&&!active(parent))return null;
     const roster=(await store.find('members',{clubId:task.clubId})).filter(m=>!m.archived),me=roster.find(m=>m.identity===job.account_id);
     if(!me)return null;
     if (job.kind === 'day_list' || job.kind === 'deadline_list') return deadlineMessage(job.kind, task, me, roster, c, email);
     if (job.kind === 'assignment_list') return assignmentMessage(task, me, c, email);
-    const own=memberPending(task,me._id),pending=roster.filter(m=>memberPending(task,m._id));
+    const own=memberPending(task,me._id),pending=roster.filter(m=>notificationsEnabled(m.identity)&&memberPending(task,m._id));
     const club=await store.get('clubs',task.clubId),lines=[`${me.name}，你好：`,`社团：${club?.name||'SPS'}`,`任务：${task.title}`];
     if(parent)lines.push('所属主任务：'+parent.title);
     lines.push('截止时间：'+date(task.dueAt));
@@ -358,6 +371,7 @@ export function createMailService({sql,store,env,now=Date.now,fetcher=fetch,code
     sql.exec("DELETE FROM email_outbox WHERE state<>'queued' AND expires_at<?",now()-30*DAY);
     sql.exec('DELETE FROM email_usage WHERE day<?',Math.floor(now()/DAY)-35);
     sql.exec('DELETE FROM account_emails WHERE account_id NOT IN (SELECT id FROM accounts)');
+    sql.exec('DELETE FROM account_preferences WHERE account_id NOT IN (SELECT id FROM accounts)');
   }
-  return {configured,info,publicUser,requestVerification,verify,changed,scanDeadlines,prepare,transmit,finish,cleanup,startedAt};
+  return {configured,info,publicUser,notificationsEnabled,setNotifications,requestVerification,verify,changed,scanDeadlines,prepare,transmit,finish,cleanup,startedAt};
 }

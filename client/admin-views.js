@@ -35,7 +35,7 @@ export function adminEditor(s) {
   <div class="field"><label class="label" for="memberRole">身份与管理类型</label>${roles.length?`<select id="memberRole" name="memberRole">${roles.map(role=>`<option value="${role}" ${f.memberRole===role?'selected':''}>${roleLabel(role)}</option>`).join('')}</select>`:`<div class="picker-value">${roleLabel(m.role)}</div>`}<p class="hint">管理权限在成员页统一显示“管理员”；主讲人单独显示。部门管理需要指定部门，同级管理员不能互相管理。</p></div>
   ${field('memberUsername','登录用户名',f.memberUsername,'text',`required minlength="3" maxlength="30" pattern="[a-zA-Z0-9_]+" autocomplete="off" autocapitalize="none" ${m.canEditAccount?'':'disabled'}`)}
   ${m.accountRestriction?`<p class="hint">${e(m.accountRestriction)}；仍可维护本社团内的资料。</p>`:'<p class="hint">用户名须为3—30位字母、数字或下划线。修改后请告知成员使用新用户名登录。</p>'}
-  <div class="section">${field('adminPassword','你的密码 · 确认账号或角色变更',f.adminPassword,'password','minlength="10" maxlength="128" autocomplete="current-password" placeholder="仅修改称呼或部门时可留空"')}</div>
+  <div class="section">${field('adminPassword','你的密码 · 确认账号或角色变更',f.adminPassword,'password','minlength="10" maxlength="128" autocomplete="current-password" placeholder="仅修改姓名或部门时可留空"')}</div>
   <div class="small muted">账号创建于 ${date(m.accountCreatedAt)} · 加入社团于 ${date(m.joinedAt)}</div>
   <button class="primary full section" type="submit" ${busy(s)}>${s.busy?'正在保存…':'保存修改'}</button>
   </fieldset></form>

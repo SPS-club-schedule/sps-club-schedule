@@ -1,0 +1,50 @@
+plugins { id 'com.android.application' }
+
+def simpleEdition = providers.gradleProperty('spsSimple').orNull == 'true'
+
+def signingFile = rootProject.file(System.getenv('SPS_ANDROID_SIGNING_PROPERTIES') ?: 'signing.properties')
+def signing = new Properties()
+if (signingFile.exists()) signingFile.withInputStream { signing.load(it) }
+
+android {
+    namespace 'org.spsclub.schedule'
+    compileSdk 36
+    defaultConfig {
+        applicationId simpleEdition ? 'org.spsclub.schedule.simple' : 'org.spsclub.schedule'
+        minSdk 26
+        targetSdk 36
+        versionCode simpleEdition ? 1 : 3
+        versionName simpleEdition ? '1.0.0' : '1.2.0'
+        buildConfigField 'boolean', 'SIMPLE_MODE', simpleEdition.toString()
+        manifestPlaceholders = [appLabel: simpleEdition ? 'SPS 极简日程' : 'SPS 社团日程']
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    signingConfigs {
+        if (signingFile.exists()) {
+            release {
+                storeFile file(signing['storeFile'])
+                storePassword signing['storePassword']
+                keyAlias signing['keyAlias']
+                keyPassword signing['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (signingFile.exists()) signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    buildFeatures { buildConfig true }
+    lint { abortOnError true }
+}
+dependencies {
+    implementation 'androidx.webkit:webkit:1.14.0'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}

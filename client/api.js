@@ -53,6 +53,7 @@ export const experienceUpload=data=>request('/experience/upload',data,{timeoutMs
 export const experienceManage=data=>request('/experience/manage',data);
 export const experienceFileUrl=id=>base+'/experience/files/'+encodeURIComponent(id);
 export const experienceIndexUrl=()=>base+'/experience';
+export const setNotifications = input => transport('accountSetNotifications', input);
 export const accountSettings = () => transport('accountSettings', {});
 export const changeUsername = input => transport('accountChangeUsername', input);
 export const changePassword = input => transport('accountChangePassword', input);

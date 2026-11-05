@@ -282,3 +282,37 @@ test('quota defers excess mail, confirmed email remains private, deleted account
   f.advance(DAY);await f.drain();assert.equal(f.sent.length,2);
   await f.assign(await f.task('deleted'));f.sql.exec('DELETE FROM accounts WHERE id=?','alice');f.mail.cleanup();f.advance(60000);await f.drain();assert.equal(f.sent.length,2);assert.equal(f.mail.info('alice').email,'');
 });
+
+test('account opt-out persists, cancels queued task mail and keeps verification available',async()=>{
+  const f=await fixture();await f.person('alice');const t=await f.task('preference');await f.assign(t);
+  assert.equal(f.mail.info('alice').emailNotificationsEnabled,true);
+  f.mail.setNotifications('alice',false);f.restart();assert.equal(f.mail.info('alice').emailNotificationsEnabled,false);
+  f.advance(60_000);await f.drain();assert.equal(f.sent.length,0);assert.equal(f.jobs()[0].state,'cancelled');
+  await f.assign(await f.task('after-opt-out'));await f.drain();assert.equal(f.sent.length,0);
+  f.mail.requestVerification('alice','new@example.test');await f.drain();assert.equal(f.sent.length,1);assert.match(f.sent[0].body.subject,/验证码/);
+  f.mail.verify('alice','123456');f.mail.setNotifications('alice',true);await f.assign(await f.task('after-opt-in'));f.advance(60_000);await f.drain();assert.equal(f.sent.length,2);
+  assert.throws(()=>f.mail.setNotifications('alice','false'),/开关无效/);
+});
+test('opted-out overdue members never trigger manager notices, including queued and retried digests',async()=>{
+  const f=await fixture();await f.person('alice');await f.person('bob');await f.person('lead',{role:'department_admin'});
+  await f.task('private-overdue',{participantIds:['m_alice'],dueAt:START+60_000});
+  await f.task('mixed-overdue',{participantIds:['m_alice','m_bob'],dueAt:START+60_000});
+  f.advance(60_000);await f.mail.scanDeadlines();
+  // Preferences can change after cron enqueues but before delivery.
+  f.mail.setNotifications('alice',false);await f.drain();
+  assert.ok(f.sent.every(x=>x.body.to[0]!=='alice@example.test'));
+  const lead=f.sent.filter(x=>x.body.to[0]==='lead@example.test');assert.equal(lead.length,1);assert.match(lead[0].body.text,/bob/);assert.doesNotMatch(lead[0].body.text,/alice|private-overdue/);
+  // A failed send has a frozen provider payload. Revoking the last member must
+  // cancel the manager retry, even if it was already prepared once.
+  const g=await fixture();await g.person('alice');await g.person('lead',{role:'department_admin'});await g.task('retry',{dueAt:START+60_000});g.advance(60_000);await g.mail.scanDeadlines();
+  g.respond(()=>Response.json({}, {status:503}));
+  for(let i=0;i<2;i++){let job=await g.mail.prepare();if(job?.wait){g.advance(job.wait);job=await g.mail.prepare();}g.mail.finish(job,await g.mail.transmit(job));}
+  g.mail.setNotifications('alice',false);const count=g.sent.length;g.advance(3600000);await g.drain();assert.equal(g.sent.length,count);
+});
+test('opted-out managers receive no escalation; simple containers produce no phantom reminders',async()=>{
+  const f=await fixture();await f.person('alice');await f.person('lead',{role:'department_admin'});f.mail.setNotifications('lead',false);
+  const root=await f.task('heading',{simpleContainer:true,participantIds:['m_alice'],dueAt:START+60_000});
+  const child=await f.task('real-work',{parentTaskId:root._id,participantIds:['m_alice'],dueAt:START+60_000});
+  await f.mail.changed(null,{baseVersion:0,version:1,tasks:[root,child]},'createSimpleTask','lead');f.advance(60_000);await f.mail.scanDeadlines();await f.drain();
+  assert.ok(f.sent.every(x=>x.body.to[0]==='alice@example.test'));assert.ok(f.sent.every(x=>!x.body.text.includes('#/task?id=heading&')));assert.ok(f.sent.some(x=>x.body.text.includes('#/task?id=real-work&')));
+});

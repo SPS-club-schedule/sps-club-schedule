@@ -22,6 +22,18 @@ npm run gateway:deploy
 
 Worker 使用无第三方 Cookie 的 Bearer 会话，适用于 GitHub Pages 与 `workers.dev` 分属不同站点的情况。会话不出现在 URL 中；邀请链接在 URL fragment 内，不会作为页面访问路径发送给静态站点服务器。
 
+### Resend 发信配置
+
+2026-11-04 已完成邮件服务基础配置：
+
+- 发信域名 `sps-schedule.folderrewind.top`，区域 Tokyo / `ap-northeast-1`；Resend 域名、DKIM 和两条发信 CNAME 均已显示 `Verified`。
+- 专用 API 密钥名称为 `sps-club-schedule-production`，权限为 `Sending access`，域名限制为 `sps-schedule.folderrewind.top`。
+- 密钥已保存为原业务 Worker **`sps-club-api`** 的 **`RESEND_API_KEY` Secret**。后续后端通过 `env.RESEND_API_KEY` 读取；网关 Worker 和静态前端不保存该密钥。
+- 发件人为 `SPS 社团日程 <notifications@sps-schedule.folderrewind.top>`；邮箱绑定、验证码、任务通知队列与每分钟 Cron 已部署。
+- 已接入新注册必填邮箱、老用户补填提醒、负责人分配、截止前24小时、到期/逾期、部门管理员升级与依赖完成通知。229项测试和 Pages 发布通过，API `/health` 正常；实际收件确认待成员验证自己的邮箱。详见 [实现与运维](Resend邮件通知-实施与运维.md) 与 [发布验收](../qa/email-notifications-verification.md)。
+
+DNS 记录与操作交接见 [DNS 配置说明](Leafuke-Resend邮件通知-DNS配置.md) 和 [Leafuke 的配置回执](resend/2026-11-04-dns-handoff/SPS-Resend-DNS配置回执.md)。本次暂存密钥的受限权限文件已删除；文档和仓库均不保存密钥值。后续如需轮换，应创建相同权限及域名范围的密钥，更新此 Worker 的 Secret 后验证，再撤销旧密钥。
+
 ## GitHub Pages 前端
 
 使用独立仓库 `sps-club-schedule`，仅上传本项目源码。不要上传其他工作区、`.wrangler/`、`.dev.vars` 或本地账号数据。公开的是网页与代码，社团数据保存在后端，登录并通过成员权限检查后才能读取。

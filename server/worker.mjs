@@ -189,7 +189,7 @@ export class ClubService extends DurableObject {
     const selfAccount = typeof data.action === 'string' && data.action.startsWith('account');
     if (selfAccount && data.action !== 'accountSettings') {
       this.limit('account-write:' + account.id, 60, 15 * 60000);
-      if (!['accountVerifyEmail','accountResendEmail'].includes(data.action)) this.limit('account-password:' + account.id, 10, 15 * 60000);
+      if (!['accountVerifyEmail','accountResendEmail','accountSetNotifications'].includes(data.action)) this.limit('account-password:' + account.id, 10, 15 * 60000);
       if (data.action==='accountVerifyEmail') this.limit('email-code:'+account.id,6,15*60000);
       if (['accountRequestEmail','accountResendEmail'].includes(data.action)) {
         this.limit('email-request:'+account.id,5,3600000);
@@ -263,7 +263,7 @@ export class ClubService extends DurableObject {
         return json({ ok: false, code: 'INTERNAL', message: '服务暂时不可用，请稍后重试' }, 500);
       }
     });
-    if(response.ok&&this.mail.configured()&&(path==='/auth/register'||['accountRequestEmail','accountResendEmail','accountVerifyEmail','createTask','createTaskGroup','editTask','complete'].includes(data.action)))this.ctx.waitUntil(this.pumpMail());
+    if(response.ok&&this.mail.configured()&&(path==='/auth/register'||['accountRequestEmail','accountResendEmail','accountVerifyEmail','createTask','createTaskGroup','editTask','createSimpleTask','editSimpleTask','complete'].includes(data.action)))this.ctx.waitUntil(this.pumpMail());
     return response;
   }
   async pumpMail() {

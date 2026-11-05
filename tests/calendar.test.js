@@ -104,7 +104,7 @@ test('manual deadlines outside duration remain visible; completion, removal and 
   const t=task('range','2026-10-29','20:00',{startsAt:parseDeadline('2026-11-02','10:00'),endsAt:parseDeadline('2026-11-02','12:00')});
   assert.equal(calendar([t],{date:'2026-10-29'}).tasks.length,1);
   assert.equal(calendar([t],{month:'2026-11',date:'2026-11-02'}).tasks.length,1);
-  assert.equal(calendar([{...t,parentTaskId:'parent'}],{month:'2026-11'}).monthCount,0);
+  assert.equal(calendar([{...t,parentTaskId:'parent'}],{month:'2026-11'}).monthCount,1);
   assert.equal(calendar([{...t,startsAt:null,endsAt:null}],{month:'2026-11'}).monthCount,0);
   t.completions.me=now;
   assert.equal(calendar([t],{mine:true,month:'2026-11'}).monthCount,0);

@@ -17,7 +17,7 @@ function dueLabel(timestamp, now) {
   return `${p.date === today ? '今天' : p.date === tomorrow ? '明天' : p.date.slice(5).replace('-', '月') + '日'} ${p.time}`;
 }
 function hasDuration(task) {
-  return !task.parentTaskId && Number.isSafeInteger(task.startsAt) && Number.isSafeInteger(task.endsAt) && task.endsAt>task.startsAt;
+  return Number.isSafeInteger(task.startsAt) && Number.isSafeInteger(task.endsAt) && task.endsAt>task.startsAt;
 }
 function durationLabel(task) {
   if (!hasDuration(task)) return '';
