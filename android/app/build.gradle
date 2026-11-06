@@ -11,8 +11,8 @@ android {
         applicationId 'org.spsclub.schedule'
         minSdk 26
         targetSdk 36
-        versionCode 7
-        versionName '1.6.0'
+        versionCode 8
+        versionName '1.6.1'
         manifestPlaceholders = [appLabel: 'SPS 社团日程']
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
